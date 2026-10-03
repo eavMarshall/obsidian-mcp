@@ -100,12 +100,24 @@ impl McpServer {
                         }
                     },
                     {
+                        "name": "create_folder",
+                        "description": "Creates a new empty folder inside a vault",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "vault_id": { "type": "string" },
+                                "path": { "type": "string", "description": "Relative path to the folder" }
+                            },
+                            "required": ["vault_id", "path"]
+                        }
+                    },
+                    {
                         "name": "search_vault",
                         "description": "Searches the vault for markdown chunks matching a query",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
-                                "vault_id": { "type": "string" },
+                                "vault_id": { "type": "string", "description": "The vault ID, or 'all' to search globally across all codebases" },
                                 "query": { "type": "string" }
                             },
                             "required": ["vault_id", "query"]
@@ -117,7 +129,7 @@ impl McpServer {
                         "inputSchema": {
                             "type": "object",
                             "properties": {
-                                "vault_id": { "type": "string" },
+                                "vault_id": { "type": "string", "description": "The vault ID, or 'all' to search globally across all codebases" },
                                 "file_name": { "type": "string" }
                             },
                             "required": ["vault_id", "file_name"]
@@ -161,6 +173,11 @@ impl McpServer {
                 let append = args.get("append").and_then(|v| v.as_bool()).unwrap_or(false);
                 self.write_note_logic(vault_id, path, content, append)
             }
+            "create_folder" => {
+                let vault_id = args.get("vault_id").and_then(|v| v.as_str()).unwrap_or("");
+                let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                self.create_folder_logic(vault_id, path)
+            }
             "search_vault" => {
                 let vault_id = args.get("vault_id").and_then(|v| v.as_str()).unwrap_or("");
                 let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
@@ -201,6 +218,11 @@ impl McpServer {
 
     fn add_vault_logic(&self, vault_id: &str, path: &str, read_only: bool) -> Result<serde_json::Value, String> {
         let mut config = self.config.write().unwrap();
+        
+        // Physically create the vault directory if it doesn't exist
+        if let Err(e) = fs::create_dir_all(path) {
+            eprintln!("Warning: Could not physically create vault directory at {}: {}", path, e);
+        }
         
         // Update in-memory state
         config.vaults.retain(|v| v.id != vault_id);
@@ -278,28 +300,55 @@ impl McpServer {
         }))
     }
 
-    fn search_vault_logic(&self, vault_id: &str, query: &str) -> Result<serde_json::Value, String> {
+    fn create_folder_logic(&self, vault_id: &str, relative_path: &str) -> Result<serde_json::Value, String> {
         let config = self.config.read().unwrap();
         let vault = config.vaults.iter().find(|v| v.id == vault_id)
             .ok_or_else(|| format!("Vault {} not found", vault_id))?;
             
-        let md_files = crate::vault::VaultScanner::scan_markdown_files(&vault.path)
-            .map_err(|e| format!("Failed to scan vault: {}", e))?;
+        if vault.read_only {
+            return Err(format!("Vault {} is configured as read-only", vault_id));
+        }
+        
+        let mut full_path = PathBuf::from(&vault.path);
+        full_path.push(relative_path);
+
+        fs::create_dir_all(&full_path)
+            .map_err(|e| format!("Failed to create folder: {}", e))?;
+
+        Ok(json!({
+            "status": "success",
+            "folder": relative_path
+        }))
+    }
+
+    fn search_vault_logic(&self, vault_id: &str, query: &str) -> Result<serde_json::Value, String> {
+        let config = self.config.read().unwrap();
+        let vaults_to_search: Vec<_> = if vault_id == "all" {
+            config.vaults.iter().collect()
+        } else {
+            vec![config.vaults.iter().find(|v| v.id == vault_id)
+                .ok_or_else(|| format!("Vault {} not found", vault_id))?]
+        };
             
         let mut results = Vec::new();
         let query_lower = query.to_lowercase();
         
-        for file in md_files {
-            if let Ok(content) = fs::read_to_string(&file) {
-                let relative_path = file.strip_prefix(&vault.path).unwrap_or(&file).to_string_lossy().to_string();
-                let chunks = MarkdownParser::chunk_by_headers(&content);
-                for chunk in chunks {
-                    if chunk.header.to_lowercase().contains(&query_lower) || chunk.content.to_lowercase().contains(&query_lower) {
-                        results.push(json!({
-                            "file": relative_path,
-                            "header": chunk.header,
-                            "snippet": chunk.content.chars().take(300).collect::<String>()
-                        }));
+        for vault in vaults_to_search {
+            if let Ok(md_files) = crate::vault::VaultScanner::scan_markdown_files(&vault.path) {
+                for file in md_files {
+                    if let Ok(content) = fs::read_to_string(&file) {
+                        let relative_path = file.strip_prefix(&vault.path).unwrap_or(&file).to_string_lossy().to_string();
+                        let chunks = MarkdownParser::chunk_by_headers(&content);
+                        for chunk in chunks {
+                            if chunk.header.to_lowercase().contains(&query_lower) || chunk.content.to_lowercase().contains(&query_lower) {
+                                results.push(json!({
+                                    "vault_id": vault.id,
+                                    "file": relative_path,
+                                    "header": chunk.header,
+                                    "snippet": chunk.content.chars().take(300).collect::<String>()
+                                }));
+                            }
+                        }
                     }
                 }
             }
@@ -313,11 +362,12 @@ impl McpServer {
 
     fn get_links_logic(&self, vault_id: &str, file_name: &str) -> Result<serde_json::Value, String> {
         let config = self.config.read().unwrap();
-        let vault = config.vaults.iter().find(|v| v.id == vault_id)
-            .ok_or_else(|| format!("Vault {} not found", vault_id))?;
-            
-        let md_files = crate::vault::VaultScanner::scan_markdown_files(&vault.path)
-            .map_err(|e| format!("Failed to scan vault: {}", e))?;
+        let vaults_to_search: Vec<_> = if vault_id == "all" {
+            config.vaults.iter().collect()
+        } else {
+            vec![config.vaults.iter().find(|v| v.id == vault_id)
+                .ok_or_else(|| format!("Vault {} not found", vault_id))?]
+        };
             
         let mut forward_links = Vec::new();
         let mut backlinks = Vec::new();
@@ -326,18 +376,22 @@ impl McpServer {
             .and_then(|s| s.to_str())
             .unwrap_or(file_name);
 
-        for file in md_files {
-            if let Ok(content) = fs::read_to_string(&file) {
-                let current_relative_path = file.strip_prefix(&vault.path).unwrap_or(&file).to_string_lossy().to_string();
-                let current_base_name = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                let extracted = MarkdownParser::extract_links(&content);
-                
-                if current_base_name == target_base_name || current_relative_path == file_name {
-                    forward_links = extracted.clone();
-                }
-                
-                if extracted.iter().any(|link| link.as_str() == target_base_name) {
-                    backlinks.push(current_relative_path);
+        for vault in vaults_to_search {
+            if let Ok(md_files) = crate::vault::VaultScanner::scan_markdown_files(&vault.path) {
+                for file in md_files {
+                    if let Ok(content) = fs::read_to_string(&file) {
+                        let current_relative_path = file.strip_prefix(&vault.path).unwrap_or(&file).to_string_lossy().to_string();
+                        let current_base_name = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                        let extracted = MarkdownParser::extract_links(&content);
+                        
+                        if current_base_name == target_base_name || current_relative_path == file_name {
+                            forward_links = extracted.clone();
+                        }
+                        
+                        if extracted.iter().any(|link| link.as_str() == target_base_name) {
+                            backlinks.push(json!({"vault_id": vault.id.clone(), "file": current_relative_path}));
+                        }
+                    }
                 }
             }
         }

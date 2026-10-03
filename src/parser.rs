@@ -43,6 +43,19 @@ impl MarkdownParser {
                         current_content.push_str(&text);
                     }
                 }
+                Event::Start(Tag::CodeBlock(kind)) => {
+                    current_content.push_str("```");
+                    if let pulldown_cmark::CodeBlockKind::Fenced(lang) = kind {
+                        current_content.push_str(&lang);
+                    }
+                    current_content.push('\n');
+                }
+                Event::End(TagEnd::CodeBlock) => {
+                    if !current_content.ends_with('\n') {
+                        current_content.push('\n');
+                    }
+                    current_content.push_str("```\n");
+                }
                 Event::Code(code) => {
                     current_content.push('`');
                     current_content.push_str(&code);

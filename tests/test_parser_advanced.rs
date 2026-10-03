@@ -19,7 +19,7 @@ We link to [[AnotherNote|Alias]] and [[RawNote]].
     assert_eq!(chunks[0].header, "Intro");
     
     // Check that code blocks are preserved with backticks so the LLM doesn't lose syntax
-    assert!(chunks[1].content.contains("`rust\nfn main() {}\n`"));
+    assert!(chunks[1].content.contains("```rust\nfn main() {}\n```"));
     
     // Check the exact extracted links
     let links = MarkdownParser::extract_links(raw);
