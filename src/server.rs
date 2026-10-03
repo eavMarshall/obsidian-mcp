@@ -232,13 +232,14 @@ impl McpServer {
 
 RULES:
 1. ATOMICITY: Every concept must be extremely atomic. One indivisible concept per markdown file. Never combine disparate ideas. If a note exceeds 200 words, split it into two notes.
-2. FOLDERS AS TYPES: Place files ONLY in the following directories based on their ontological type:
-   - `/MOCs` (Maps of Content, index notes, hubs)
-   - `/Concepts` (Atomic ideas, theories, patterns)
-   - `/Entities` (People, organizations, tools, codebase mappings)
-   - `/Logs` (Chronological, append-only entries like meetings)
-   - `/Sources` (Raw unprocessed data or highlights)
-3. STRUCTURAL METADATA (YAML): Every file must begin with valid YAML containing at minimum the `up:` field which links to its parent category or MOC.
+2. CORE ZONES & FOLDER FREEDOM: You have complete freedom to create operational folders (e.g., `/Test Cases`, `/Projects`), but you MUST organize pure knowledge into these exact core folders:
+   - `/MOCs`: Maps of Content. Navigational hubs and domain indices.
+   - `/Concepts`: Pure atomic knowledge (theories, logic, math).
+   - `/Entities`: Real-world instantiations (people, codebase mappings).
+   - `/Sources`: Raw unprocessed data or external highlights.
+   - `/Logs`: Chronological append-only entries (meetings, daily notes).
+   Remember: Operational/working files can live anywhere, but they MUST connect back to the core knowledge graph.
+3. STRUCTURAL METADATA (YAML): Every single file (whether a concept, test case, or script) must begin with valid YAML containing at minimum the `up:` field which links to its parent category or MOC.
    Example:
    ---
    up: "[[Main Topic]]"
@@ -401,16 +402,11 @@ RULES:
         }
 
         // STRICT ARCHITECTURAL VALIDATION (Only validate on new files, not appends)
-        if !append {
-            let path_lower = relative_path.to_lowercase();
-            if !(path_lower.starts_with("mocs/") || 
-                 path_lower.starts_with("concepts/") || 
-                 path_lower.starts_with("entities/") || 
-                 path_lower.starts_with("logs/") || 
-                 path_lower.starts_with("sources/")) {
-                return Err("ARCHITECTURAL VIOLATION: File must be placed in one of the strict ontological directories: /MOCs, /Concepts, /Entities, /Logs, or /Sources.".to_string());
-            }
+        if relative_path.to_lowercase() == "_index.md" || relative_path.to_lowercase().ends_with("/_index.md") {
+            return Err("ARCHITECTURAL VIOLATION: You are strictly forbidden from modifying the core _index.md file. This file is managed by the human Vault Architect.".to_string());
+        }
 
+        if !append {
             if !content.trim().starts_with("---") || !content.contains("up:") {
                 return Err("ARCHITECTURAL VIOLATION: Every new file must contain valid YAML frontmatter at the very top, and must include at minimum an `up:` field linking to its parent node or MOC (e.g. `up: \"[[Parent Topic]]\"`). No orphans allowed.".to_string());
             }
