@@ -6,12 +6,9 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    eprintln!("Starting Headless Markdown MCP Gateway...");
-    
     // Default to config.yaml in the current directory
     let config_str = fs::read_to_string("config.yaml").unwrap_or_else(|_| {
-        eprintln!("Warning: config.yaml not found, using empty config");
-        String::from("server:\n  port: 8080\nvaults: []")
+        String::from("vaults: []")
     });
     
     let config: AppConfig = serde_yaml::from_str(&config_str)?;

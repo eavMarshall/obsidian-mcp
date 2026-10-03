@@ -21,15 +21,77 @@ impl McpServer {
         let stdin = io::stdin();
         let mut stdout = io::stdout();
         let mut reader = BufReader::new(stdin).lines();
+        
+        // Open log file for debugging
+        let mut log_file = fs::OpenOptions::new().create(true).append(true).open("mcp_log.txt")?;
 
         while let Some(line) = reader.next_line().await? {
-            if let Ok(req) = serde_json::from_str::<JsonRpcRequest>(&line) {
-                let id = req.id.clone().unwrap_or(serde_json::Value::Null);
-                
-                let response = match req.method.as_str() {
-                    "tools/list" => self.handle_list_tools(id),
-                    "tools/call" => self.handle_call_tool(req.params, id),
-                    _ => JsonRpcResponse {
+            if line.trim().is_empty() { continue; }
+            
+            // Log incoming
+            use std::io::Write;
+            writeln!(log_file, "INCOMING: {}", line)?;
+            
+            match serde_json::from_str::<JsonRpcRequest>(&line) {
+                Ok(req) => {
+                    if let Some(resp) = self.handle_request(req) {
+                        let resp_str = serde_json::to_string(&resp)? + "\n";
+                        writeln!(log_file, "OUTGOING: {}", resp_str.trim())?;
+                        stdout.write_all(resp_str.as_bytes()).await?;
+                        stdout.flush().await?;
+                    }
+                }
+                Err(e) => {
+                    writeln!(log_file, "PARSE ERROR: {} - Payload: {}", e, line)?;
+                    let err_resp = JsonRpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: serde_json::Value::Null,
+                        result: None,
+                        error: Some(JsonRpcError {
+                            code: -32700,
+                            message: "Parse error".to_string(),
+                        }),
+                    };
+                    let resp_str = serde_json::to_string(&err_resp)? + "\n";
+                    stdout.write_all(resp_str.as_bytes()).await?;
+                    stdout.flush().await?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn handle_request(&self, req: JsonRpcRequest) -> Option<JsonRpcResponse> {
+        // If the request doesn't have an ID, it's a JSON-RPC notification.
+        // The JSON-RPC 2.0 spec mandates that servers MUST NOT respond to notifications, even if they fail.
+        let is_notification = req.id.is_none() || req.id.as_ref().unwrap().is_null();
+        let id = req.id.clone().unwrap_or(serde_json::Value::Null);
+        
+        match req.method.as_str() {
+            "initialize" => Some(JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id,
+                result: Some(json!({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {
+                        "tools": {}
+                    },
+                    "serverInfo": {
+                        "name": "obsidian-mcp",
+                        "version": "0.1.0"
+                    }
+                })),
+                error: None,
+            }),
+            "notifications/initialized" => None,
+            "tools/list" => Some(self.handle_list_tools(id)),
+            "tools/call" => Some(self.handle_call_tool(req.params, id)),
+            _ => {
+                if is_notification {
+                    None // Never reply to unknown notifications (e.g. notifications/roots/list_changed)
+                } else {
+                    Some(JsonRpcResponse {
                         jsonrpc: "2.0".to_string(),
                         id,
                         result: None,
@@ -37,16 +99,10 @@ impl McpServer {
                             code: -32601,
                             message: "Method not found".to_string(),
                         }),
-                    },
-                };
-
-                let resp_str = serde_json::to_string(&response)? + "\n";
-                stdout.write_all(resp_str.as_bytes()).await?;
-                stdout.flush().await?;
+                    })
+                }
             }
         }
-
-        Ok(())
     }
 
     fn handle_list_tools(&self, id: serde_json::Value) -> JsonRpcResponse {

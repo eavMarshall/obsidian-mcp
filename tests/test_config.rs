@@ -3,8 +3,6 @@ use obsidian_mcp::config::AppConfig;
 #[test]
 fn test_parse_valid_config() {
     let yaml_str = r#"
-server:
-  port: 8080
 vaults:
   - id: "work"
     path: "/vaults/work"
@@ -17,7 +15,6 @@ vaults:
     // This will fail because AppConfig does not exist yet!
     let config: AppConfig = serde_yaml::from_str(yaml_str).expect("Failed to parse YAML");
 
-    assert_eq!(config.server.port, 8080);
     assert_eq!(config.vaults.len(), 2);
     
     assert_eq!(config.vaults[0].id, "work");

@@ -1,11 +1,10 @@
-use obsidian_mcp::config::{AppConfig, ServerConfig, VaultConfig};
+use obsidian_mcp::config::{AppConfig, VaultConfig};
 use obsidian_mcp::server::McpServer;
 use std::sync::{Arc, RwLock};
 
 #[tokio::test]
 async fn test_missing_vault_error() {
     let config = AppConfig {
-        server: ServerConfig { port: 8080 },
         vaults: vec![],
     };
     let server = McpServer::new(Arc::new(RwLock::new(config)));
@@ -25,7 +24,7 @@ async fn test_missing_vault_error() {
 
 #[tokio::test]
 async fn test_invalid_tool_error() {
-    let config = AppConfig { server: ServerConfig { port: 8080 }, vaults: vec![] };
+    let config = AppConfig { vaults: vec![] };
     let server = McpServer::new(Arc::new(RwLock::new(config)));
 
     let params = serde_json::json!({

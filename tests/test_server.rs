@@ -1,4 +1,4 @@
-use obsidian_mcp::config::{AppConfig, ServerConfig, VaultConfig};
+use obsidian_mcp::config::{AppConfig, VaultConfig};
 use obsidian_mcp::server::McpServer;
 use std::sync::{Arc, RwLock};
 use tempfile::tempdir;
@@ -9,7 +9,6 @@ async fn test_read_and_write_note() {
     let vault_path = dir.path().to_str().unwrap().to_string();
 
     let config = AppConfig {
-        server: ServerConfig { port: 8080 },
         vaults: vec![
             VaultConfig {
                 id: "test_vault".to_string(),
@@ -121,6 +120,39 @@ async fn test_read_and_write_note() {
     let text = link_result["content"][0]["text"].as_str().unwrap();
     
     // We expect note_b.md to be listed in the backlinks
-    assert!(text.contains(r#""backlinks":["note_b.md"]"#));
-}
+    // We expect note_b.md to be listed in the backlinks. Wait, get_links with 'all' returns an array of objects.
+    // The previous test expects `["note_b.md"]` which was the old format, the new format is `[{"vault_id": "test_vault", "file": "note_b.md"}]`
+    assert!(text.contains(r#""file":"note_b.md""#));
 
+    // Test Global Search with "all"
+    let global_search_params = serde_json::json!({
+        "name": "search_vault",
+        "arguments": {
+            "vault_id": "all",
+            "query": "test note"
+        }
+    });
+
+    let global_search_resp = server.handle_call_tool_for_test(Some(global_search_params), serde_json::json!(7));
+    assert!(global_search_resp.error.is_none());
+    let global_search_result = global_search_resp.result.unwrap();
+    let global_results_array = global_search_result["content"][0]["text"].as_str().unwrap();
+    assert!(global_results_array.contains("test.md"));
+    assert!(global_results_array.contains("test_vault"));
+
+    // Test add_vault physical directory creation
+    let new_vault_path = dir.path().join("new_physical_vault");
+    let add_vault_params = serde_json::json!({
+        "name": "add_vault",
+        "arguments": {
+            "vault_id": "new_vault",
+            "path": new_vault_path.to_str().unwrap(),
+            "read_only": false
+        }
+    });
+
+    let add_resp = server.handle_call_tool_for_test(Some(add_vault_params), serde_json::json!(8));
+    assert!(add_resp.error.is_none());
+    assert!(new_vault_path.exists());
+    assert!(new_vault_path.is_dir());
+}

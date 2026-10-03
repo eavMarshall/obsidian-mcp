@@ -21,8 +21,6 @@ This gateway transforms local directories of Markdown files into a token-optimiz
 ## Configuration
 Mount `config.yaml` to map your vaults:
 ```yaml
-server:
-  port: 8080
 vaults:
   - id: "work"
     path: "/vaults/work"
@@ -33,13 +31,15 @@ vaults:
 ```
 
 ## Run
+Use the provided launch scripts to run the container interactively with dynamic workspace mounting (required for MCP stdio).
 ```bash
-docker build -t markdown-mcp .
-docker run -d \
-  -v ./config.yaml:/app/config.yaml \
-  -v ./my_vault:/vaults/work \
-  -p 8080:8080 \
-  markdown-mcp
+docker build -t obsidian-mcp:latest .
+
+# Windows
+run.bat
+
+# Linux / macOS
+./run.sh
 ```
 
 ## MCP Tools

@@ -4,8 +4,10 @@ use serde_json::Value;
 #[derive(Debug, Deserialize, Serialize)]
 pub struct JsonRpcRequest {
     pub jsonrpc: String,
+    #[serde(default)]
     pub id: Option<Value>,
     pub method: String,
+    #[serde(default)]
     pub params: Option<Value>,
 }
 
