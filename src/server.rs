@@ -75,7 +75,8 @@ impl McpServer {
                 result: Some(json!({
                     "protocolVersion": "2024-11-05",
                     "capabilities": {
-                        "tools": {}
+                        "tools": {},
+                        "prompts": {}
                     },
                     "serverInfo": {
                         "name": "obsidian-mcp",
@@ -87,6 +88,8 @@ impl McpServer {
             "notifications/initialized" => None,
             "tools/list" => Some(self.handle_list_tools(id)),
             "tools/call" => Some(self.handle_call_tool(req.params, id)),
+            "prompts/list" => Some(self.handle_list_prompts(id)),
+            "prompts/get" => Some(self.handle_get_prompt(req.params, id)),
             _ => {
                 if is_notification {
                     None // Never reply to unknown notifications (e.g. notifications/roots/list_changed)
@@ -189,6 +192,73 @@ impl McpServer {
                                 "file_name": { "type": "string" }
                             },
                             "required": ["vault_id", "file_name"]
+                        }
+                    }
+                ]
+            })),
+            error: None,
+        }
+    }
+
+    fn handle_list_prompts(&self, id: serde_json::Value) -> JsonRpcResponse {
+        JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id,
+            result: Some(json!({
+                "prompts": [
+                    {
+                        "name": "knowledge_base_architect",
+                        "description": "The master system prompt for AI-optimized Knowledge Base maintenance",
+                        "arguments": []
+                    }
+                ]
+            })),
+            error: None,
+        }
+    }
+
+    fn handle_get_prompt(&self, params: Option<serde_json::Value>, id: serde_json::Value) -> JsonRpcResponse {
+        let name = params.and_then(|p| p.get("name").and_then(|n| n.as_str()).map(|n| n.to_string())).unwrap_or_default();
+        if name != "knowledge_base_architect" {
+            return JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id,
+                result: None,
+                error: Some(JsonRpcError { code: -32602, message: "Prompt not found".to_string() }),
+            };
+        }
+
+        let prompt_text = r#"You are the Vault Architect. Your objective is to maintain a high-density, easily traversable knowledge graph.
+
+RULES:
+1. ATOMICITY: Every concept must be extremely atomic. One indivisible concept per markdown file. Never combine disparate ideas. If a note exceeds 200 words, split it into two notes.
+2. FOLDERS AS TYPES: Place files ONLY in the following directories based on their ontological type:
+   - `/MOCs` (Maps of Content, index notes, hubs)
+   - `/Concepts` (Atomic ideas, theories, patterns)
+   - `/Entities` (People, organizations, tools, codebase mappings)
+   - `/Logs` (Chronological, append-only entries like meetings)
+   - `/Sources` (Raw unprocessed data or highlights)
+3. STRUCTURAL METADATA (YAML): Every file must begin with valid YAML containing at minimum the `up:` field which links to its parent category or MOC.
+   Example:
+   ---
+   up: "[[Main Topic]]"
+   related: "[[Lateral Topic]]"
+   ---
+4. NO ORPHANS: Every new file must link UP to at least one broader parent node (`up:`). Unlinked nodes are strictly prohibited.
+5. CONTEXTUAL LINKS: Use standard [[WikiLinks]] in the body text for human-readable context. Never drop an isolated link without surrounding text explaining the relationship.
+6. APPEND > REWRITE: To save token bandwidth, try to append to existing files instead of rewriting large monolithic documents."#;
+
+        JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id,
+            result: Some(json!({
+                "description": "The master system prompt for AI-optimized Knowledge Base maintenance",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": {
+                            "type": "text",
+                            "text": prompt_text
                         }
                     }
                 ]
@@ -328,6 +398,22 @@ impl McpServer {
             
         if vault.read_only {
             return Err(format!("Vault {} is configured as read-only", vault_id));
+        }
+
+        // STRICT ARCHITECTURAL VALIDATION (Only validate on new files, not appends)
+        if !append {
+            let path_lower = relative_path.to_lowercase();
+            if !(path_lower.starts_with("mocs/") || 
+                 path_lower.starts_with("concepts/") || 
+                 path_lower.starts_with("entities/") || 
+                 path_lower.starts_with("logs/") || 
+                 path_lower.starts_with("sources/")) {
+                return Err("ARCHITECTURAL VIOLATION: File must be placed in one of the strict ontological directories: /MOCs, /Concepts, /Entities, /Logs, or /Sources.".to_string());
+            }
+
+            if !content.trim().starts_with("---") || !content.contains("up:") {
+                return Err("ARCHITECTURAL VIOLATION: Every new file must contain valid YAML frontmatter at the very top, and must include at minimum an `up:` field linking to its parent node or MOC (e.g. `up: \"[[Parent Topic]]\"`). No orphans allowed.".to_string());
+            }
         }
         
         let mut full_path = PathBuf::from(&vault.path);

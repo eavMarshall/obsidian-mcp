@@ -30,16 +30,24 @@ vaults:
     read_only: true
 ```
 
-## Run
-Use the provided launch scripts to run the container interactively with dynamic workspace mounting (required for MCP stdio).
+## Build & Run
+
+**For Tech-Savvy Users (Native Compilation):**
+If you have the Rust toolchain installed, you can build the blazing-fast executable natively:
 ```bash
-docker build -t obsidian-mcp:latest .
+cargo build --release
+```
+The resulting executable will be placed in `target/release/obsidian-mcp`.
 
-# Windows
-run.bat
+**For Non-Tech-Savvy Users:**
+You can completely skip building! Just go to the **GitHub Releases** page and download the pre-compiled native executable for your operating system (Windows `.exe`, macOS, or Linux).
 
-# Linux / macOS
-./run.sh
+**To Run (Once built or downloaded):**
+No Docker is required! Just run the executable directly, or point your MCP client's configuration file straight to the binary:
+```json
+{
+  "command": "/path/to/obsidian-mcp"
+}
 ```
 
 ## MCP Tools
