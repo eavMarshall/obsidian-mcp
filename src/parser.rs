@@ -88,10 +88,11 @@ impl MarkdownParser {
         
         for cap in re.captures_iter(markdown) {
             if let Some(matched) = cap.get(1) {
-                // Handle aliases like [[Note Title|Alias]]
-                let link_core = matched.as_str().split('|').next().unwrap_or("").trim().to_string();
-                if !link_core.is_empty() {
-                    links.push(link_core);
+                // Handle aliases like [[Note Title|Alias]] and anchors like [[Note Title#Header]]
+                let link_core = matched.as_str().split('|').next().unwrap_or("").trim();
+                let link_base = link_core.split('#').next().unwrap_or("").trim().to_string();
+                if !link_base.is_empty() {
+                    links.push(link_base);
                 }
             }
         }

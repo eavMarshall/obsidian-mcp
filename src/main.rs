@@ -6,8 +6,11 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Default to config.yaml in the current directory
-    let config_str = fs::read_to_string("config.yaml").unwrap_or_else(|_| {
+    // The cross-compiler strips directories, so it drops this in the Antigravity CWD.
+    // Renamed to prevent collisions with other project config files.
+    let config_path = std::path::PathBuf::from("obsidian-mcp-config.yaml");
+    
+    let config_str = fs::read_to_string(&config_path).unwrap_or_else(|_| {
         String::from("vaults: []")
     });
     
