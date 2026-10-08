@@ -57,3 +57,6 @@ No Docker is required! Just run the executable directly, or point your MCP clien
 - `write_note(vault_id, title, content, append: bool)` -> `success`
 - `get_links(vault_id, title)` -> `[forward_links, backlinks]`
 - `reload_config()` -> `success`
+
+## 🤖 AI Vault Migration
+If you are an AI agent tasked with migrating or converting a user's existing unstructured Obsidian vault to be compatible with this gateway's strict referential integrity rules, please read the [AI_MIGRATION_GUIDE.md](AI_MIGRATION_GUIDE.md) for step-by-step instructions.
