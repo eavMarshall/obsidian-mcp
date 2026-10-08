@@ -3,8 +3,8 @@ use std::fs::File;
 use std::path::PathBuf;
 use tempfile::tempdir;
 
-#[test]
-fn test_scan_markdown_files_only() {
+#[tokio::test]
+async fn test_scan_markdown_files_only() {
     // Create a temporary directory mimicking a vault
     let dir = tempdir().unwrap();
     let file_path1 = dir.path().join("rule_api.md");

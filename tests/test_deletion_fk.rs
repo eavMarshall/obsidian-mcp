@@ -1,6 +1,7 @@
 use obsidian_mcp::config::{AppConfig, VaultConfig};
 use obsidian_mcp::server::McpServer;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tempfile::tempdir;
 use std::fs;
 
@@ -19,7 +20,7 @@ async fn test_deletion_fk_constraints() {
         ],
     };
 
-    let server = McpServer::new(Arc::new(RwLock::new(config)));
+    let server = McpServer::new(Arc::new(RwLock::new(config)), std::path::PathBuf::from("dummy.yaml"));
     
     // Create base files
     let _ = fs::write(dir.path().join("Index.md"), "---\nup: \"[[Index]]\"\n---\n# Root");
@@ -35,21 +36,21 @@ async fn test_deletion_fk_constraints() {
             "path": "TargetNote.md"
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(delete_linked_req), serde_json::json!(1));
+    let resp = server.handle_call_tool_for_test(Some(delete_linked_req), serde_json::json!(1)).await;
     assert!(resp.error.is_some());
     assert!(resp.error.unwrap().message.contains("Foreign Key Constraint failed"));
     
-    // Case 2: Delete rules file (_VAULT_RULES.md)
+    // Case 2: Delete rules file (HOW_TO_NAVIGATE.md)
     let delete_rules_req = serde_json::json!({
         "name": "delete_note",
         "arguments": {
             "vault_id": "test_vault",
-            "path": "_VAULT_RULES.md"
+            "path": "HOW_TO_NAVIGATE.md"
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(delete_rules_req), serde_json::json!(2));
+    let resp = server.handle_call_tool_for_test(Some(delete_rules_req), serde_json::json!(2)).await;
     assert!(resp.error.is_some());
-    assert!(resp.error.unwrap().message.contains("cannot delete the auto-generated _VAULT_RULES.md"));
+    assert!(resp.error.unwrap().message.contains("cannot delete the auto-generated HOW_TO_NAVIGATE.md"));
     
     // Case 3: Verify we can delete a note with no backlinks
     let delete_unlinked_req = serde_json::json!({
@@ -59,6 +60,6 @@ async fn test_deletion_fk_constraints() {
             "path": "SourceNote.md"
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(delete_unlinked_req), serde_json::json!(3));
+    let resp = server.handle_call_tool_for_test(Some(delete_unlinked_req), serde_json::json!(3)).await;
     assert!(resp.error.is_none());
 }

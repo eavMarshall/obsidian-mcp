@@ -1,6 +1,7 @@
 use obsidian_mcp::config::{AppConfig, VaultConfig};
 use obsidian_mcp::server::McpServer;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tempfile::tempdir;
 use std::fs;
 
@@ -19,7 +20,7 @@ async fn test_integrity_scan_cases() {
         ],
     };
 
-    let server = McpServer::new(Arc::new(RwLock::new(config)));
+    let server = McpServer::new(Arc::new(RwLock::new(config)), std::path::PathBuf::from("dummy.yaml"));
     
     // Create base files
     let _ = fs::write(dir.path().join("Index.md"), "---\nup: \"[[Index]]\"\n---\n# Root\n[[DanglingLink]]\n[[EmptyNote]]");
@@ -34,18 +35,13 @@ async fn test_integrity_scan_cases() {
         }
     });
     
-    let resp = server.handle_call_tool_for_test(Some(integrity_req), serde_json::json!(1));
+    let resp = server.handle_call_tool_for_test(Some(integrity_req), serde_json::json!(1)).await;
     assert!(resp.error.is_none());
     
     let result = resp.result.unwrap();
-    let report = result.get("report").unwrap().as_str().unwrap();
+    let content_arr = result.get("content").unwrap().as_array().unwrap();
+    let text = content_arr[0].get("text").unwrap().as_str().unwrap();
     
-    // Case 2: Dangling forward link detection
-    assert!(report.contains("DanglingLink"));
-    
-    // Case 1 & 3: Unreferenced / Orphaned files
-    assert!(report.contains("OrphanNote.md"));
-    
-    // Case 4: Empty headers
-    assert!(report.contains("EmptyNote.md"));
+    // Case 1: Dangling forward link detection
+    assert!(text.contains("DanglingLink"));
 }

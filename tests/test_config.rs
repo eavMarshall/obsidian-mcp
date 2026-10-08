@@ -1,7 +1,7 @@
 use obsidian_mcp::config::AppConfig;
 
-#[test]
-fn test_parse_valid_config() {
+#[tokio::test]
+async fn test_parse_valid_config() {
     let yaml_str = r#"
 vaults:
   - id: "work"

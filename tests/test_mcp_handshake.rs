@@ -1,15 +1,16 @@
 use obsidian_mcp::config::AppConfig;
 use obsidian_mcp::server::McpServer;
 use obsidian_mcp::mcp::JsonRpcRequest;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
-#[test]
-fn test_mcp_handshake() {
+#[tokio::test]
+async fn test_mcp_handshake() {
     let config = AppConfig {
         vaults: vec![],
     };
 
-    let server = McpServer::new(Arc::new(RwLock::new(config)));
+    let server = McpServer::new(Arc::new(RwLock::new(config)), std::path::PathBuf::from("dummy.yaml"));
 
     // Test initialize request
     let init_req = JsonRpcRequest {
@@ -19,7 +20,7 @@ fn test_mcp_handshake() {
         params: None,
     };
 
-    let init_resp = server.handle_request(init_req).expect("Expected a response for initialize");
+    let init_resp = server.handle_request(init_req).await.expect("Expected a response for initialize");
     
     assert_eq!(init_resp.id, serde_json::json!(1));
     assert!(init_resp.error.is_none());
@@ -37,6 +38,6 @@ fn test_mcp_handshake() {
         params: None,
     };
 
-    let notif_resp = server.handle_request(notif_req);
+    let notif_resp = server.handle_request(notif_req).await;
     assert!(notif_resp.is_none());
 }

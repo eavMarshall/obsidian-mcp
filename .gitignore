@@ -31,3 +31,4 @@ config.local.yaml
 .Trashes
 ehthumbs.db
 Thumbs.db
+/scratch

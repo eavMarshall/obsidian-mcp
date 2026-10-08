@@ -1,102 +1,188 @@
-use pulldown_cmark::{Event, Parser as CmarkParser, Tag, TagEnd};
+use pulldown_cmark::{Event, Options, Parser as CmarkParser, Tag, TagEnd};
+use std::sync::OnceLock;
 
 pub struct MarkdownParser;
 
 #[derive(Debug, PartialEq)]
-pub struct Chunk {
-    pub header: String,
-    pub content: String,
+pub struct Chunk<'a> {
+    pub header: std::borrow::Cow<'a, str>,
+    pub content: &'a str,
 }
 
+static WIKILINK_REGEX: OnceLock<regex::Regex> = OnceLock::new();
+
 impl MarkdownParser {
-    /// Parses a raw markdown string and chunks it into sections based on headers.
-    /// This is the core of our "AST-Based Chunking" token-saving feature.
-    pub fn chunk_by_headers(markdown: &str) -> Vec<Chunk> {
-        let parser = CmarkParser::new(markdown);
+    pub fn chunk_by_headers(markdown: &str) -> Vec<Chunk<'_>> {
+        let mut options = Options::empty();
+        options.insert(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS);
+        
+        let parser = CmarkParser::new_ext(markdown, options).into_offset_iter();
         let mut chunks = Vec::new();
         
         let mut current_header = String::from("ROOT");
-        let mut current_content = String::new();
+        let mut chunk_start_offset = 0;
         let mut in_header = false;
 
-        for event in parser {
+        for (event, range) in parser {
             match event {
                 Event::Start(Tag::Heading { .. }) => {
-                    // Push the previous chunk if it has content
-                    if !current_content.trim().is_empty() {
-                        chunks.push(Chunk {
-                            header: current_header.clone(),
-                            content: current_content.trim().to_string(),
-                        });
+                    let chunk_end_offset = range.start;
+                    if chunk_start_offset < chunk_end_offset {
+                        let content = &markdown[chunk_start_offset..chunk_end_offset];
+                        if !content.trim().is_empty() {
+                            chunks.push(Chunk {
+                                header: std::borrow::Cow::Owned(std::mem::take(&mut current_header)),
+                                content: content.trim(),
+                            });
+                        }
                     }
-                    current_content.clear();
+                    
+                    chunk_start_offset = range.start;
                     current_header.clear();
                     in_header = true;
                 }
                 Event::End(TagEnd::Heading(_)) => {
-                    in_header = false;
+                    if in_header {
+                        in_header = false;
+                    }
+                }
+                Event::SoftBreak | Event::HardBreak => {
+                    if in_header {
+                        current_header.push(' ');
+                    }
                 }
                 Event::Text(text) => {
                     if in_header {
                         current_header.push_str(&text);
-                    } else {
-                        current_content.push_str(&text);
                     }
-                }
-                Event::Start(Tag::CodeBlock(kind)) => {
-                    current_content.push_str("```");
-                    if let pulldown_cmark::CodeBlockKind::Fenced(lang) = kind {
-                        current_content.push_str(&lang);
-                    }
-                    current_content.push('\n');
-                }
-                Event::End(TagEnd::CodeBlock) => {
-                    if !current_content.ends_with('\n') {
-                        current_content.push('\n');
-                    }
-                    current_content.push_str("```\n");
                 }
                 Event::Code(code) => {
-                    current_content.push('`');
-                    current_content.push_str(&code);
-                    current_content.push('`');
+                    if in_header {
+                        current_header.push_str(&code);
+                    }
                 }
-                Event::SoftBreak | Event::HardBreak => {
-                    current_content.push('\n');
-                }
-                _ => {
-                    // Ignore other formatting to save tokens (stripping noise)
-                }
+                _ => {}
             }
         }
 
-        // Push the final chunk
-        if !current_content.trim().is_empty() {
-            chunks.push(Chunk {
-                header: current_header.clone(),
-                content: current_content.trim().to_string(),
-            });
+        if chunk_start_offset < markdown.len() {
+            if let Some(content) = markdown.get(chunk_start_offset..) {
+                if !content.trim().is_empty() {
+                    chunks.push(Chunk {
+                        header: std::borrow::Cow::Owned(std::mem::take(&mut current_header)),
+                        content: content.trim(),
+                    });
+                }
+            }
         }
 
         chunks
     }
 
-    /// Extracts all [[wikilinks]] from a markdown document
     pub fn extract_links(markdown: &str) -> Vec<String> {
-        let re = regex::Regex::new(r"\[\[(.*?)\]\]").unwrap();
+        let re = WIKILINK_REGEX.get_or_init(|| regex::Regex::new(r"\[\[(.*?)\]\]").unwrap());
+        
+        let mut code_ranges = Vec::new();
+        let mut current_block_start = None;
+        let parser = CmarkParser::new(markdown).into_offset_iter();
+        for (event, range) in parser {
+            match event {
+                Event::Start(Tag::CodeBlock(_)) => {
+                    current_block_start = Some(range.start);
+                }
+                Event::End(TagEnd::CodeBlock) => {
+                    if let Some(start) = current_block_start.take() {
+                        code_ranges.push(start..range.end);
+                    }
+                }
+                Event::Code(_) => {
+                    code_ranges.push(range);
+                }
+                _ => {}
+            }
+        }
+        if let Some(start) = current_block_start.take() {
+            code_ranges.push(start..markdown.len());
+        }
+        
         let mut links = Vec::new();
         
         for cap in re.captures_iter(markdown) {
-            if let Some(matched) = cap.get(1) {
-                // Handle aliases like [[Note Title|Alias]] and anchors like [[Note Title#Header]]
-                let link_core = matched.as_str().split('|').next().unwrap_or("").trim();
-                let link_base = link_core.split('#').next().unwrap_or("").trim().to_string();
-                if !link_base.is_empty() {
-                    links.push(link_base);
+            let mat = cap.get(0).unwrap(); // Get full match to check offset
+            let is_in_code = code_ranges.iter().any(|r| r.contains(&mat.start()));
+            
+            if !is_in_code {
+                if let Some(matched) = cap.get(1) {
+                    let link_core = matched.as_str().split('|').next().unwrap_or("").trim();
+                    let link_base = link_core.split('#').next().unwrap_or("").trim().to_string();
+                    if !link_base.is_empty() {
+                        links.push(link_base);
+                    }
                 }
             }
         }
         
         links
+    }
+
+    pub fn rename_links(markdown: &str, old_targets: &[String], new_target: &str) -> String {
+        let re = WIKILINK_REGEX.get_or_init(|| regex::Regex::new(r"\[\[(.*?)\]\]").unwrap());
+        
+        let mut code_ranges = Vec::new();
+        let mut current_block_start = None;
+        let parser = CmarkParser::new(markdown).into_offset_iter();
+        for (event, range) in parser {
+            match event {
+                Event::Start(Tag::CodeBlock(_)) => { current_block_start = Some(range.start); }
+                Event::End(TagEnd::CodeBlock) => {
+                    if let Some(start) = current_block_start.take() { code_ranges.push(start..range.end); }
+                }
+                Event::Code(_) => { code_ranges.push(range); }
+                _ => {}
+            }
+        }
+        if let Some(start) = current_block_start.take() { code_ranges.push(start..markdown.len()); }
+        
+        let mut result = String::with_capacity(markdown.len());
+        let mut last_match_end = 0;
+
+        for cap in re.captures_iter(markdown) {
+            let mat = cap.get(0).unwrap();
+            let inner_mat = cap.get(1).unwrap();
+            let is_in_code = code_ranges.iter().any(|r| r.contains(&mat.start()));
+            
+            result.push_str(&markdown[last_match_end..inner_mat.start()]);
+
+            if !is_in_code {
+                let inner_text = inner_mat.as_str();
+                let split_pipe: Vec<&str> = inner_text.splitn(2, '|').collect();
+                let split_hash: Vec<&str> = split_pipe[0].splitn(2, '#').collect();
+                let link_base = split_hash[0].trim();
+                let link_lower = link_base.to_lowercase();
+                
+                if old_targets.iter().any(|t| t == &link_lower) {
+                    // Match found, replace link_base with new_target
+                    // Preserve leading/trailing whitespace around link_base? Typically we just emit the new target.
+                    result.push_str(new_target);
+                    if split_hash.len() > 1 {
+                        result.push('#');
+                        result.push_str(split_hash[1]);
+                    }
+                    if split_pipe.len() > 1 {
+                        result.push('|');
+                        result.push_str(split_pipe[1]);
+                    }
+                } else {
+                    result.push_str(inner_text);
+                }
+            } else {
+                result.push_str(inner_mat.as_str());
+            }
+            
+            last_match_end = inner_mat.end();
+        }
+        
+        result.push_str(&markdown[last_match_end..]);
+        result
     }
 }

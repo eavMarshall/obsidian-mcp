@@ -1,6 +1,7 @@
 use obsidian_mcp::config::{AppConfig, VaultConfig};
 use obsidian_mcp::server::McpServer;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -18,7 +19,7 @@ async fn test_rename_note_auto_updates_links() {
         ],
     };
 
-    let server = McpServer::new(Arc::new(RwLock::new(config)));
+    let server = McpServer::new(Arc::new(RwLock::new(config)), std::path::PathBuf::from("dummy.yaml"));
 
     // 1. Create Index.md
     let write_index = serde_json::json!({
@@ -30,7 +31,7 @@ async fn test_rename_note_auto_updates_links() {
             "append": false
         }
     });
-    let resp1 = server.handle_call_tool_for_test(Some(write_index), serde_json::json!(1));
+    let resp1 = server.handle_call_tool_for_test(Some(write_index), serde_json::json!(1)).await;
     assert!(resp1.error.is_none(), "Failed to create Index.md: {:?}", resp1.error);
 
     // 2. Create Target.md
@@ -43,7 +44,7 @@ async fn test_rename_note_auto_updates_links() {
             "append": false
         }
     });
-    let resp2 = server.handle_call_tool_for_test(Some(write_target), serde_json::json!(2));
+    let resp2 = server.handle_call_tool_for_test(Some(write_target), serde_json::json!(2)).await;
     assert!(resp2.error.is_none(), "Failed to create Target.md: {:?}", resp2.error);
 
     // 3. Create Dependent.md linking to Target.md
@@ -56,7 +57,7 @@ async fn test_rename_note_auto_updates_links() {
             "append": false
         }
     });
-    let resp3 = server.handle_call_tool_for_test(Some(write_dependent), serde_json::json!(3));
+    let resp3 = server.handle_call_tool_for_test(Some(write_dependent), serde_json::json!(3)).await;
     assert!(resp3.error.is_none(), "Failed to create Dependent.md: {:?}", resp3.error);
 
     // 4. Try to rename Target.md to NewTarget.md
@@ -68,7 +69,7 @@ async fn test_rename_note_auto_updates_links() {
             "new_path": "NewTarget.md"
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(rename), serde_json::json!(4));
+    let resp = server.handle_call_tool_for_test(Some(rename), serde_json::json!(4)).await;
     assert!(resp.error.is_none(), "Failed to rename note: {:?}", resp.error);
 
     // 5. Verify Target.md no longer exists but NewTarget.md does

@@ -1,7 +1,7 @@
 use obsidian_mcp::parser::MarkdownParser;
 
-#[test]
-fn test_ast_chunking_cases() {
+#[tokio::test]
+async fn test_ast_chunking_cases() {
     // Case 1: Multiple H1 headers
     let raw_h1 = "# Header A\nContent A\n# Header B\nContent B";
     let chunks_h1 = MarkdownParser::chunk_by_headers(raw_h1);

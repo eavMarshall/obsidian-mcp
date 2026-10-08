@@ -3,6 +3,7 @@ use obsidian_mcp::server::McpServer;
 use anyhow::Result;
 use std::fs;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -15,9 +16,9 @@ async fn main() -> Result<()> {
     });
     
     let config: AppConfig = serde_yaml::from_str(&config_str)?;
-    let shared_config = Arc::new(std::sync::RwLock::new(config));
+    let shared_config = Arc::new(RwLock::new(config));
 
-    let server = McpServer::new(shared_config);
+    let server = McpServer::new(shared_config, config_path);
     server.run().await?;
     
     Ok(())

@@ -3,18 +3,20 @@ use crate::mcp::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
 use crate::parser::MarkdownParser;
 use anyhow::Result;
 use serde_json::json;
-use std::fs;
+use tokio::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 pub struct McpServer {
     config: Arc<RwLock<AppConfig>>,
+    config_path: PathBuf,
 }
 
 impl McpServer {
-    pub fn new(config: Arc<RwLock<AppConfig>>) -> Self {
-        Self { config }
+    pub fn new(config: Arc<RwLock<AppConfig>>, config_path: PathBuf) -> Self {
+        Self { config, config_path }
     }
 
     pub async fn run(&self) -> Result<()> {
@@ -23,26 +25,26 @@ impl McpServer {
         let mut reader = BufReader::new(stdin).lines();
         
         // Open log file for debugging
-        let mut log_file = fs::OpenOptions::new().create(true).append(true).open("mcp_log.txt")?;
+        let mut log_file = fs::OpenOptions::new().create(true).append(true).open("mcp_log.txt").await?;
 
         while let Some(line) = reader.next_line().await? {
             if line.trim().is_empty() { continue; }
             
             // Log incoming
-            use std::io::Write;
-            writeln!(log_file, "INCOMING: {}", line)?;
+            use tokio::io::AsyncWriteExt;
+            log_file.write_all(format!("INCOMING: {}", line).as_bytes()).await?;
             
             match serde_json::from_str::<JsonRpcRequest>(&line) {
                 Ok(req) => {
-                    if let Some(resp) = self.handle_request(req) {
+                    if let Some(resp) = self.handle_request(req).await {
                         let resp_str = serde_json::to_string(&resp)? + "\n";
-                        writeln!(log_file, "OUTGOING: {}", resp_str.trim())?;
+                        log_file.write_all(format!("OUTGOING: {}\n", resp_str.trim()).as_bytes()).await?;
                         stdout.write_all(resp_str.as_bytes()).await?;
                         stdout.flush().await?;
                     }
                 }
                 Err(e) => {
-                    writeln!(log_file, "PARSE ERROR: {} - Payload: {}", e, line)?;
+                    log_file.write_all(format!("PARSE ERROR: {} - Payload: {}", e, line).as_bytes()).await?;
                     let err_resp = JsonRpcResponse {
                         jsonrpc: "2.0".to_string(),
                         id: serde_json::Value::Null,
@@ -62,7 +64,7 @@ impl McpServer {
         Ok(())
     }
 
-    pub fn handle_request(&self, req: JsonRpcRequest) -> Option<JsonRpcResponse> {
+    pub async fn handle_request(&self, req: JsonRpcRequest) -> Option<JsonRpcResponse> {
         // If the request doesn't have an ID, it's a JSON-RPC notification.
         // The JSON-RPC 2.0 spec mandates that servers MUST NOT respond to notifications, even if they fail.
         let is_notification = req.id.is_none() || req.id.as_ref().unwrap().is_null();
@@ -87,7 +89,7 @@ impl McpServer {
             }),
             "notifications/initialized" => None,
             "tools/list" => Some(self.handle_list_tools(id)),
-            "tools/call" => Some(self.handle_call_tool(req.params, id)),
+            "tools/call" => Some(self.handle_call_tool(req.params, id).await),
             "prompts/list" => Some(self.handle_list_prompts(id)),
             "prompts/get" => Some(self.handle_get_prompt(req.params, id)),
             _ => {
@@ -216,6 +218,30 @@ impl McpServer {
                             },
                             "required": ["vault_id"]
                         }
+                    },
+                    {
+                        "name": "list_mocs",
+                        "description": "Returns a list of all structural Maps of Content (MOCs) or index files to help the AI satisfy the 'up:' link constraints",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "vault_id": { "type": "string", "description": "The vault ID, or 'all'" }
+                            },
+                            "required": ["vault_id"]
+                        }
+                    },
+                    {
+                        "name": "rename_note",
+                        "description": "Renames a markdown note and automatically updates all backlinks to point to the new name.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "vault_id": { "type": "string" },
+                                "old_path": { "type": "string" },
+                                "new_path": { "type": "string" }
+                            },
+                            "required": ["vault_id", "old_path", "new_path"]
+                        }
                     }
                 ]
             })),
@@ -291,7 +317,7 @@ RULES:
         }
     }
 
-    fn handle_call_tool(&self, params: Option<serde_json::Value>, id: serde_json::Value) -> JsonRpcResponse {
+    async fn handle_call_tool(&self, params: Option<serde_json::Value>, id: serde_json::Value) -> JsonRpcResponse {
         let empty_args = json!({});
         let params = params.unwrap_or(empty_args.clone());
         let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -299,7 +325,7 @@ RULES:
 
         let result = match name {
             "list_vaults" => {
-                let config = self.config.read().unwrap();
+                let config = self.config.read().await;
                 let vaults: Vec<_> = config.vaults.iter().map(|v| {
                     json!({"id": v.id, "read_only": v.read_only})
                 }).collect();
@@ -309,49 +335,53 @@ RULES:
                 let vault_id = args.get("vault_id").and_then(|v| v.as_str()).unwrap_or("");
                 let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
                 let read_only = args.get("read_only").and_then(|v| v.as_bool()).unwrap_or(false);
-                self.add_vault_logic(vault_id, path, read_only)
+                self.add_vault_logic(vault_id, path, read_only).await
             }
             "read_note" => {
                 let vault_id = args.get("vault_id").and_then(|v| v.as_str()).unwrap_or("");
                 let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                self.read_note_logic(vault_id, path)
+                self.read_note_logic(vault_id, path).await
             }
             "write_note" => {
                 let vault_id = args.get("vault_id").and_then(|v| v.as_str()).unwrap_or("");
                 let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
                 let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
                 let append = args.get("append").and_then(|v| v.as_bool()).unwrap_or(false);
-                self.write_note_logic(vault_id, path, content, append)
+                self.write_note_logic(vault_id, path, content, append).await
             }
             "create_folder" => {
                 let vault_id = args.get("vault_id").and_then(|v| v.as_str()).unwrap_or("");
                 let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                self.create_folder_logic(vault_id, path)
+                self.create_folder_logic(vault_id, path).await
             }
             "search_vault" => {
                 let vault_id = args.get("vault_id").and_then(|v| v.as_str()).unwrap_or("");
                 let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-                self.search_vault_logic(vault_id, query)
+                self.search_vault_logic(vault_id, query).await
             }
             "get_links" => {
                 let vault_id = args.get("vault_id").and_then(|v| v.as_str()).unwrap_or("");
                 let file_name = args.get("file_name").and_then(|v| v.as_str()).unwrap_or("");
-                self.get_links_logic(vault_id, file_name)
+                self.get_links_logic(vault_id, file_name).await
             }
             "delete_note" => {
                 let vault_id = args.get("vault_id").and_then(|v| v.as_str()).unwrap_or("");
                 let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                self.delete_note_logic(vault_id, path)
+                self.delete_note_logic(vault_id, path).await
             }
             "rename_note" => {
                 let vault_id = args.get("vault_id").and_then(|v| v.as_str()).unwrap_or("");
                 let old_path = args.get("old_path").and_then(|v| v.as_str()).unwrap_or("");
                 let new_path = args.get("new_path").and_then(|v| v.as_str()).unwrap_or("");
-                self.rename_note_logic(vault_id, old_path, new_path)
+                self.rename_note_logic(vault_id, old_path, new_path).await
             }
             "check_integrity" => {
                 let vault_id = args.get("vault_id").and_then(|v| v.as_str()).unwrap_or("");
-                self.check_integrity_logic(vault_id)
+                self.check_integrity_logic(vault_id).await
+            }
+            "list_mocs" => {
+                let vault_id = args.get("vault_id").and_then(|v| v.as_str()).unwrap_or("");
+                self.list_mocs_logic(vault_id).await
             }
             _ => Err("Unknown tool".to_string()),
         };
@@ -377,39 +407,43 @@ RULES:
         }
     }
 
-    pub fn handle_call_tool_for_test(&self, params: Option<serde_json::Value>, id: serde_json::Value) -> JsonRpcResponse {
-        self.handle_call_tool(params, id)
+    pub async fn handle_call_tool_for_test(&self, params: Option<serde_json::Value>, id: serde_json::Value) -> JsonRpcResponse {
+        self.handle_call_tool(params, id).await
     }
 
-    fn add_vault_logic(&self, vault_id: &str, path: &str, read_only: bool) -> Result<serde_json::Value, String> {
-        let mut config = self.config.write().unwrap();
+    async fn add_vault_logic(&self, vault_id: &str, path: &str, read_only: bool) -> Result<serde_json::Value, String> {
+        let mut config = self.config.write().await;
         
         // Physically create the vault directory if it doesn't exist
-        if let Err(e) = fs::create_dir_all(path) {
+        if let Err(e) = fs::create_dir_all(path).await {
             eprintln!("Warning: Could not physically create vault directory at {}: {}", path, e);
         } else {
-            // Automatically generate a human-readable rulebook for other human users
-            let rules_path = std::path::PathBuf::from(path).join("_VAULT_RULES.md");
-            if !rules_path.exists() {
-                let rules_content = r#"# Vault Architectural Rules
+            // Automatically generate a friendly navigation and rules guide for human users
+            let nav_path = std::path::PathBuf::from(path).join("HOW_TO_NAVIGATE.md");
+            if !nav_path.exists() {
+                let nav_content = r#"# How to Navigate This Vault
 
 > **[AUTO-GENERATED FILE - DO NOT EDIT]**
-> This file was automatically generated by the Obsidian MCP Gateway. 
-> This vault is actively managed by an autonomous AI Assistant. To prevent breaking the AI's internal knowledge graph, please adhere to the following rules when manually creating or editing files.
+> This vault is actively managed by an autonomous AI Assistant. It is organized as an interconnected **Knowledge Graph** rather than a strict top-down folder hierarchy. To prevent breaking the AI's internal graph, please adhere to the following structure when manually creating or editing files.
 
-## 1. Core Ontological Zones
-Pure knowledge must be strictly organized into these root directories:
+## 1. How to Traverse (For Humans)
+If you are not using AI tools to navigate, here is the easiest way to traverse the vault:
+- **Start at the MOCs:** Begin in the `/MOCs` directory or the root `Index.md` (if it exists). These act as dashboards grouping links to related concepts.
+- **Follow the `up:` Links (Bottom-Up):** If you land on a deeply nested note inside `/Concepts`, look at the `up:` link in the YAML frontmatter to zoom out to its parent category. No note is an orphan; you can always find your way back up.
+- **Lateral Links & Backlinks:** Use standard `[[WikiLinks]]` in the body text to explore laterally. Use your markdown editor's **Backlinks pane** to see every atomic concept that mentions the note you are currently viewing.
+
+## 2. Core Ontological Zones (For Manual Edits)
+If you add files manually, pure knowledge must be strictly organized into these root directories:
 - `/MOCs`: Maps of Content (navigational hubs)
-- `/Concepts`: Pure atomic knowledge (one idea per file)
-- `/Entities`: Real-world instantiations (people, codebase mappings)
-- `/Sources`: Raw unprocessed data
-- `/Logs`: Chronological append-only entries
+- `/Concepts`: Pure atomic knowledge (one indivisible idea per file, usually under 200 words)
+- `/Entities`: Real-world instantiations (people, codebase mappings, projects)
+- `/Sources`: Raw unprocessed data, articles, or web clippings
+- `/Logs`: Chronological append-only entries (daily journals, meetings)
 
-## 2. Operational Freedom
-You may create any other folders you need for active work (e.g., `/Test Cases`, `/Projects`, `/Drafts`).
+*Note: You may create any other folders you need for active operational work (e.g., `/Test Cases`, `/Drafts`).*
 
 ## 3. The Mandatory YAML Link
-Every single markdown file in this vault **MUST** include YAML frontmatter linking it back to a parent concept in the Knowledge Graph. Do not leave "orphan" files.
+Every single markdown file in this vault **MUST** include YAML frontmatter linking it back to a parent concept in the Knowledge Graph. 
 
 Example:
 ```yaml
@@ -418,7 +452,7 @@ up: "[[Main Topic]]"
 ---
 ```
 "#;
-                let _ = fs::write(rules_path, rules_content);
+                let _ = fs::write(nav_path, nav_content).await;
             }
         }
         
@@ -434,10 +468,8 @@ up: "[[Main Topic]]"
         let yaml_str = serde_yaml::to_string(&*config)
             .map_err(|e| format!("Failed to serialize config: {}", e))?;
             
-        let config_path = std::path::PathBuf::from("obsidian-mcp-config.yaml");
-
-        fs::write(&config_path, yaml_str)
-            .map_err(|e| format!("Failed to write obsidian-mcp-config.yaml: {}", e))?;
+        fs::write(&self.config_path, yaml_str).await
+            .map_err(|e| format!("Failed to write config file: {}", e))?;
 
         Ok(json!({
             "status": "success",
@@ -445,15 +477,24 @@ up: "[[Main Topic]]"
         }))
     }
 
-    fn read_note_logic(&self, vault_id: &str, relative_path: &str) -> Result<serde_json::Value, String> {
-        let config = self.config.read().unwrap();
+    fn sanitize_path(path: &str) -> Result<String, String> {
+        let normalized = path.replace("\\", "/");
+        if normalized.contains("..") || normalized.starts_with("/") || normalized.contains(":") {
+            return Err(format!("Invalid path traversal detected in '{}'", path));
+        }
+        Ok(normalized)
+    }
+
+    async fn read_note_logic(&self, vault_id: &str, relative_path: &str) -> Result<serde_json::Value, String> {
+        let config = self.config.read().await;
         let vault = config.vaults.iter().find(|v| v.id == vault_id)
             .ok_or_else(|| format!("Vault {} not found", vault_id))?;
         
+        let safe_path = Self::sanitize_path(relative_path)?;
         let mut full_path = PathBuf::from(&vault.path);
-        full_path.push(relative_path);
+        full_path.push(&safe_path);
 
-        let content = fs::read_to_string(&full_path)
+        let content = fs::read_to_string(&full_path).await
             .map_err(|e| format!("Failed to read file {}: {}", full_path.display(), e))?;
 
         let chunks = MarkdownParser::chunk_by_headers(&content);
@@ -465,45 +506,51 @@ up: "[[Main Topic]]"
         }))
     }
 
-    fn write_note_logic(&self, vault_id: &str, relative_path: &str, content: &str, append: bool) -> Result<serde_json::Value, String> {
-        let config = self.config.read().unwrap();
+    async fn write_note_logic(&self, vault_id: &str, relative_path: &str, content: &str, append: bool) -> Result<serde_json::Value, String> {
+        let config = self.config.read().await;
         let vault = config.vaults.iter().find(|v| v.id == vault_id)
             .ok_or_else(|| format!("Vault {} not found", vault_id))?;
             
         if vault.read_only {
             return Err(format!("Vault {} is configured as read-only", vault_id));
         }
+        
+        let safe_path = Self::sanitize_path(relative_path)?;
 
-        // STRICT ARCHITECTURAL VALIDATION (Only validate on new files, not appends)
-        if relative_path.to_lowercase() == "_vault_rules.md" || relative_path.to_lowercase().ends_with("/_vault_rules.md") {
-            return Err("ARCHITECTURAL VIOLATION: You are strictly forbidden from modifying the core _VAULT_RULES.md file. This file is auto-generated by the system.".to_string());
+        // STRICT ARCHITECTURAL VALIDATION
+        if safe_path.to_lowercase() == "how_to_navigate.md" || safe_path.to_lowercase().ends_with("/how_to_navigate.md") {
+            return Err("ARCHITECTURAL VIOLATION: You are strictly forbidden from modifying the core HOW_TO_NAVIGATE.md file. This file is auto-generated by the system.".to_string());
         }
 
+        let mut full_path = std::path::PathBuf::from(&vault.path);
+        full_path.push(&safe_path);
+        
         if !append {
-            if !content.trim().starts_with("---") {
-                return Err("ARCHITECTURAL VIOLATION: Every new file must contain valid YAML frontmatter at the very top, starting with `---`.".to_string());
+            let trimmed_content = content.trim_start();
+            if !trimmed_content.starts_with("---") {
+                return Err("ARCHITECTURAL VIOLATION: Every new or overwritten file must contain valid YAML frontmatter at the very top, starting with `---`.".to_string());
             }
             
             // Extract the YAML block
-            let parts: Vec<&str> = content.split("---").collect();
-            if parts.len() < 3 {
-                return Err("ARCHITECTURAL VIOLATION: Malformed YAML frontmatter. Ensure the frontmatter is enclosed in `---` blocks.".to_string());
-            }
-            
-            let yaml_str = parts[1];
-            match serde_yaml::from_str::<serde_json::Value>(yaml_str) {
-                Ok(yaml_val) => {
-                    if let Some(up_val) = yaml_val.get("up") {
-                        if up_val.is_null() || (up_val.is_string() && up_val.as_str().unwrap().trim().is_empty()) {
-                            return Err("ARCHITECTURAL VIOLATION: The `up:` field in the YAML frontmatter cannot be empty or null.".to_string());
+            let content_after_first = &trimmed_content[3..];
+            if let Some(end_idx) = content_after_first.find("---") {
+                let yaml_str = &content_after_first[..end_idx];
+                match serde_yaml::from_str::<serde_json::Value>(yaml_str) {
+                    Ok(yaml_val) => {
+                        if let Some(up_val) = yaml_val.get("up") {
+                            if up_val.is_null() || (up_val.is_string() && up_val.as_str().unwrap().trim().is_empty()) {
+                                return Err("ARCHITECTURAL VIOLATION: The `up:` field in the YAML frontmatter cannot be empty or null.".to_string());
+                            }
+                        } else {
+                            return Err("ARCHITECTURAL VIOLATION: Every new or overwritten file must include at minimum an `up:` field linking to its parent node or MOC (e.g. `up: \"[[Parent Topic]]\"`). No orphans allowed.".to_string());
                         }
-                    } else {
-                        return Err("ARCHITECTURAL VIOLATION: Every new file must include at minimum an `up:` field linking to its parent node or MOC (e.g. `up: \"[[Parent Topic]]\"`). No orphans allowed.".to_string());
+                    },
+                    Err(e) => {
+                        return Err(format!("ARCHITECTURAL VIOLATION: Invalid YAML frontmatter: {}", e));
                     }
-                },
-                Err(e) => {
-                    return Err(format!("ARCHITECTURAL VIOLATION: Invalid YAML frontmatter: {}", e));
                 }
+            } else {
+                return Err("ARCHITECTURAL VIOLATION: Malformed YAML frontmatter. Ensure the frontmatter is enclosed in `---` blocks.".to_string());
             }
         }
         
@@ -511,15 +558,26 @@ up: "[[Main Topic]]"
         let mut all_files = std::collections::HashSet::new();
         if let Ok(md_files) = crate::vault::VaultScanner::scan_markdown_files(&vault.path) {
             for f in &md_files {
+                let rel = f.strip_prefix(&vault.path).unwrap_or(f).to_string_lossy().replace("\\", "/");
+                let rel_lower = rel.to_lowercase();
                 if let Some(stem) = f.file_stem().and_then(|s| s.to_str()) {
                     all_files.insert(stem.to_lowercase());
                 }
+                if let Some(no_ext) = rel_lower.strip_suffix(".md") {
+                    all_files.insert(no_ext.to_string());
+                }
+                all_files.insert(rel_lower);
             }
         }
         // Allow the file to link to itself during creation
-        if let Some(stem) = std::path::Path::new(&relative_path).file_stem().and_then(|s| s.to_str()) {
+        let safe_lower = safe_path.to_lowercase();
+        if let Some(stem) = std::path::Path::new(&safe_path).file_stem().and_then(|s| s.to_str()) {
             all_files.insert(stem.to_lowercase());
         }
+        if let Some(no_ext) = safe_lower.strip_suffix(".md") {
+            all_files.insert(no_ext.to_string());
+        }
+        all_files.insert(safe_lower);
 
         let extracted_links = crate::parser::MarkdownParser::extract_links(content);
         for link in extracted_links {
@@ -528,34 +586,31 @@ up: "[[Main Topic]]"
             }
         }
 
-        let mut full_path = std::path::PathBuf::from(&vault.path);
-        full_path.push(relative_path);
-
         if let Some(parent) = full_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("Failed to create directories: {}", e))?;
+            fs::create_dir_all(parent).await.map_err(|e| format!("Failed to create directories: {}", e))?;
         }
 
         if append {
-            use std::fs::OpenOptions;
-            use std::io::Write;
-            let mut file = OpenOptions::new().create(true).append(true).open(&full_path)
+            use tokio::fs::OpenOptions;
+            use tokio::io::AsyncWriteExt;
+            let mut file = OpenOptions::new().create(true).append(true).open(&full_path).await
                 .map_err(|e| format!("Failed to open file for appending: {}", e))?;
-            file.write_all(content.as_bytes())
+            file.write_all(content.as_bytes()).await
                 .map_err(|e| format!("Failed to append to file: {}", e))?;
         } else {
-            fs::write(&full_path, content)
+            fs::write(&full_path, content).await
                 .map_err(|e| format!("Failed to write file: {}", e))?;
         }
 
         Ok(json!({
             "status": "success",
-            "file": relative_path,
+            "file": safe_path,
             "action": if append { "appended" } else { "written" }
         }))
     }
 
-    fn create_folder_logic(&self, vault_id: &str, relative_path: &str) -> Result<serde_json::Value, String> {
-        let config = self.config.read().unwrap();
+    async fn create_folder_logic(&self, vault_id: &str, relative_path: &str) -> Result<serde_json::Value, String> {
+        let config = self.config.read().await;
         let vault = config.vaults.iter().find(|v| v.id == vault_id)
             .ok_or_else(|| format!("Vault {} not found", vault_id))?;
             
@@ -563,20 +618,21 @@ up: "[[Main Topic]]"
             return Err(format!("Vault {} is configured as read-only", vault_id));
         }
         
+        let safe_path = Self::sanitize_path(relative_path)?;
         let mut full_path = PathBuf::from(&vault.path);
-        full_path.push(relative_path);
+        full_path.push(&safe_path);
 
-        fs::create_dir_all(&full_path)
+        fs::create_dir_all(&full_path).await
             .map_err(|e| format!("Failed to create folder: {}", e))?;
 
         Ok(json!({
             "status": "success",
-            "folder": relative_path
+            "folder": safe_path
         }))
     }
 
-    fn search_vault_logic(&self, vault_id: &str, query: &str) -> Result<serde_json::Value, String> {
-        let config = self.config.read().unwrap();
+    async fn search_vault_logic(&self, vault_id: &str, query: &str) -> Result<serde_json::Value, String> {
+        let config = self.config.read().await;
         let vaults_to_search: Vec<_> = if vault_id == "all" {
             config.vaults.iter().collect()
         } else {
@@ -590,7 +646,7 @@ up: "[[Main Topic]]"
         for vault in vaults_to_search {
             if let Ok(md_files) = crate::vault::VaultScanner::scan_markdown_files(&vault.path) {
                 for file in md_files {
-                    if let Ok(content) = fs::read_to_string(&file) {
+                    if let Ok(content) = fs::read_to_string(&file).await {
                         let relative_path = file.strip_prefix(&vault.path).unwrap_or(&file).to_string_lossy().to_string();
                         let chunks = MarkdownParser::chunk_by_headers(&content);
                         for chunk in chunks {
@@ -614,8 +670,8 @@ up: "[[Main Topic]]"
         }))
     }
 
-    fn get_links_logic(&self, vault_id: &str, file_name: &str) -> Result<serde_json::Value, String> {
-        let config = self.config.read().unwrap();
+    async fn get_links_logic(&self, vault_id: &str, file_name: &str) -> Result<serde_json::Value, String> {
+        let config = self.config.read().await;
         let vaults_to_search: Vec<_> = if vault_id == "all" {
             config.vaults.iter().collect()
         } else {
@@ -633,7 +689,7 @@ up: "[[Main Topic]]"
         for vault in vaults_to_search {
             if let Ok(md_files) = crate::vault::VaultScanner::scan_markdown_files(&vault.path) {
                 for file in md_files {
-                    if let Ok(content) = fs::read_to_string(&file) {
+                    if let Ok(content) = fs::read_to_string(&file).await {
                         let current_relative_path = file.strip_prefix(&vault.path).unwrap_or(&file).to_string_lossy().to_string();
                         let current_base_name = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                         let extracted = MarkdownParser::extract_links(&content);
@@ -657,8 +713,8 @@ up: "[[Main Topic]]"
         }))
     }
 
-    fn delete_note_logic(&self, vault_id: &str, relative_path: &str) -> Result<serde_json::Value, String> {
-        let config = self.config.read().unwrap();
+    async fn delete_note_logic(&self, vault_id: &str, relative_path: &str) -> Result<serde_json::Value, String> {
+        let config = self.config.read().await;
         let vault = config.vaults.iter().find(|v| v.id == vault_id)
             .ok_or_else(|| format!("Vault {} not found", vault_id))?;
             
@@ -666,44 +722,51 @@ up: "[[Main Topic]]"
             return Err(format!("Vault {} is configured as read-only", vault_id));
         }
 
-        if relative_path.to_lowercase() == "_vault_rules.md" || relative_path.to_lowercase().ends_with("/_vault_rules.md") {
-            return Err("ARCHITECTURAL VIOLATION: You cannot delete the auto-generated _VAULT_RULES.md file.".to_string());
+        let safe_path = Self::sanitize_path(relative_path)?;
+
+        if safe_path.to_lowercase() == "how_to_navigate.md" || safe_path.to_lowercase().ends_with("/how_to_navigate.md") {
+            return Err("ARCHITECTURAL VIOLATION: You cannot delete the auto-generated HOW_TO_NAVIGATE.md file.".to_string());
         }
         
+        let mut full_path = std::path::PathBuf::from(&vault.path);
+        full_path.push(&safe_path);
+
         // FOREIGN KEY CONSTRAINT: Prevent deleting files that are linked by other files
-        if let Some(target_stem) = std::path::Path::new(&relative_path).file_stem().and_then(|s| s.to_str()) {
-            let target_lower = target_stem.to_lowercase();
-            if let Ok(md_files) = crate::vault::VaultScanner::scan_markdown_files(&vault.path) {
-                for file in &md_files {
-                    if let Ok(content) = fs::read_to_string(&file) {
-                        let extracted = crate::parser::MarkdownParser::extract_links(&content);
-                        if extracted.iter().any(|l| l.to_lowercase() == target_lower) {
-                            let rel = file.strip_prefix(&vault.path).unwrap_or(&file).to_string_lossy().to_string();
-                            if rel != relative_path {
-                                return Err(format!("ARCHITECTURAL VIOLATION: Foreign Key Constraint failed. Cannot delete `{}` because `{}` links to it. You must remove the link first.", relative_path, rel));
-                            }
-                        }
+        let safe_lower = safe_path.to_lowercase();
+        let target_stem = std::path::Path::new(&safe_path).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+        let target_no_ext = safe_lower.strip_suffix(".md").unwrap_or(&safe_lower).to_string();
+
+        if let Ok(md_files) = crate::vault::VaultScanner::scan_markdown_files(&vault.path) {
+            for file in &md_files {
+                let rel = file.strip_prefix(&vault.path).unwrap_or(&file).to_string_lossy().replace("\\", "/");
+                if rel.to_lowercase() == safe_lower {
+                    continue; // allow file to link to itself, or it's the file we're deleting
+                }
+                if let Ok(content) = fs::read_to_string(&file).await {
+                    let extracted = crate::parser::MarkdownParser::extract_links(&content);
+                    if extracted.iter().any(|l| {
+                        let link_lower = l.to_lowercase();
+                        link_lower == target_stem || link_lower == target_no_ext || link_lower == safe_lower
+                    }) {
+                        return Err(format!("ARCHITECTURAL VIOLATION: Foreign Key Constraint failed. Cannot delete `{}` because `{}` links to it. You must remove the link first.", safe_path, rel));
                     }
                 }
             }
         }
 
-        let mut full_path = std::path::PathBuf::from(&vault.path);
-        full_path.push(relative_path);
-
         if full_path.exists() {
-            fs::remove_file(&full_path).map_err(|e| format!("Failed to delete file: {}", e))?;
+            fs::remove_file(&full_path).await.map_err(|e| format!("Failed to delete file: {}", e))?;
             Ok(json!({
                 "status": "success",
-                "message": format!("File {} deleted successfully.", relative_path)
+                "message": format!("File {} deleted successfully.", safe_path)
             }))
         } else {
-            Err(format!("File {} does not exist.", relative_path))
+            Err(format!("File {} does not exist.", safe_path))
         }
     }
 
-    fn rename_note_logic(&self, vault_id: &str, old_path: &str, new_path: &str) -> Result<serde_json::Value, String> {
-        let config = self.config.read().unwrap();
+    async fn rename_note_logic(&self, vault_id: &str, old_path: &str, new_path: &str) -> Result<serde_json::Value, String> {
+        let config = self.config.read().await;
         let vault = config.vaults.iter().find(|v| v.id == vault_id)
             .ok_or_else(|| format!("Vault {} not found", vault_id))?;
             
@@ -711,42 +774,54 @@ up: "[[Main Topic]]"
             return Err(format!("Vault {} is configured as read-only", vault_id));
         }
 
-        if old_path.to_lowercase() == "_vault_rules.md" || old_path.to_lowercase().ends_with("/_vault_rules.md") {
-            return Err("ARCHITECTURAL VIOLATION: You cannot rename the auto-generated _VAULT_RULES.md file.".to_string());
+        let safe_old = Self::sanitize_path(old_path)?;
+        let safe_new = Self::sanitize_path(new_path)?;
+
+        if safe_old.to_lowercase() == "how_to_navigate.md" || safe_old.to_lowercase().ends_with("/how_to_navigate.md") {
+            return Err("ARCHITECTURAL VIOLATION: You cannot rename the auto-generated HOW_TO_NAVIGATE.md file.".to_string());
         }
 
         let mut old_full_path = std::path::PathBuf::from(&vault.path);
-        old_full_path.push(old_path);
+        old_full_path.push(&safe_old);
         
         let mut new_full_path = std::path::PathBuf::from(&vault.path);
-        new_full_path.push(new_path);
+        new_full_path.push(&safe_new);
 
         if !old_full_path.exists() {
-            return Err(format!("Source file {} does not exist.", old_path));
+            return Err(format!("Source file {} does not exist.", safe_old));
         }
         if new_full_path.exists() {
-            return Err(format!("Destination file {} already exists.", new_path));
+            return Err(format!("Destination file {} already exists.", safe_new));
         }
 
         let old_stem = old_full_path.file_stem().unwrap().to_string_lossy().to_string();
         let new_stem = new_full_path.file_stem().unwrap().to_string_lossy().to_string();
-        let old_lower = old_stem.to_lowercase();
+        
+        let safe_old_lower = safe_old.to_lowercase();
+        let old_stem_lower = old_stem.to_lowercase();
+        let old_no_ext = safe_old_lower.strip_suffix(".md").unwrap_or(&safe_old_lower).to_string();
         
         let mut updated_files = Vec::new();
 
         // Find all backlinks and update them atomically
+        let old_targets = vec![old_stem_lower, old_no_ext, safe_old_lower];
         if let Ok(md_files) = crate::vault::VaultScanner::scan_markdown_files(&vault.path) {
             for file in &md_files {
                 if file == &old_full_path { continue; }
-                if let Ok(content) = fs::read_to_string(&file) {
+                if let Ok(content) = fs::read_to_string(&file).await {
                     let extracted = crate::parser::MarkdownParser::extract_links(&content);
-                    if extracted.iter().any(|l| l.to_lowercase() == old_lower) {
-                        // Very naive but effective link replacement for now
-                        let mut new_content = content.replace(&format!("[[{}]]", old_stem), &format!("[[{}]]", new_stem));
-                        new_content = new_content.replace(&format!("[[{}|", old_stem), &format!("[[{}|", new_stem));
-                        new_content = new_content.replace(&format!("[[{}#", old_stem), &format!("[[{}#", new_stem));
-                        
-                        if let Ok(_) = fs::write(file, new_content) {
+                    let mut needs_update = false;
+                    for link in extracted {
+                        let link_lower = link.to_lowercase();
+                        if old_targets.iter().any(|t| t == &link_lower) {
+                            needs_update = true;
+                            break;
+                        }
+                    }
+
+                    if needs_update {
+                        let new_content = crate::parser::MarkdownParser::rename_links(&content, &old_targets, &new_stem);
+                        if let Ok(_) = fs::write(file, new_content).await {
                             updated_files.push(file.strip_prefix(&vault.path).unwrap_or(file).to_string_lossy().to_string());
                         }
                     }
@@ -756,37 +831,46 @@ up: "[[Main Topic]]"
 
         // Now safe to rename the file itself
         if let Some(parent) = new_full_path.parent() {
-            fs::create_dir_all(parent).unwrap_or(());
+            fs::create_dir_all(parent).await.unwrap_or(());
         }
         
-        fs::rename(&old_full_path, &new_full_path).map_err(|e| format!("Failed to rename file: {}", e))?;
+        fs::rename(&old_full_path, &new_full_path).await.map_err(|e| format!("Failed to rename file: {}", e))?;
 
         Ok(json!({
             "status": "success",
-            "message": format!("File renamed from {} to {}.", old_path, new_path),
+            "message": format!("File renamed from {} to {}.", safe_old, safe_new),
             "updated_backlinks": updated_files
         }))
     }
 
-    fn check_integrity_logic(&self, vault_id: &str) -> Result<serde_json::Value, String> {
-        let config = self.config.read().unwrap();
+    async fn check_integrity_logic(&self, vault_id: &str) -> Result<serde_json::Value, String> {
+        let config = self.config.read().await;
         let vault = config.vaults.iter().find(|v| v.id == vault_id)
             .ok_or_else(|| format!("Vault {} not found", vault_id))?;
             
         let mut dead_links = Vec::new();
         let mut all_files = std::collections::HashSet::new();
         
-        // Pass 1: Collect all valid basenames
-        if let Ok(md_files) = crate::vault::VaultScanner::scan_markdown_files(&vault.path) {
-            for file in &md_files {
-                if let Some(stem) = file.file_stem().and_then(|s| s.to_str()) {
+        // Pass 1: Collect all valid files (including attachments) and their path variants
+        for entry in walkdir::WalkDir::new(&vault.path).into_iter().filter_map(|e| e.ok()) {
+            if entry.path().is_file() {
+                if let Some(stem) = entry.path().file_stem().and_then(|s| s.to_str()) {
                     all_files.insert(stem.to_lowercase());
                 }
+                let rel = entry.path().strip_prefix(&vault.path).unwrap_or(entry.path()).to_string_lossy().replace("\\", "/");
+                let rel_lower = rel.to_lowercase();
+                all_files.insert(rel_lower.clone());
+                if let Some((no_ext, _)) = rel_lower.rsplit_once('.') {
+                    all_files.insert(no_ext.to_string());
+                }
             }
+        }
+        
+        if let Ok(md_files) = crate::vault::VaultScanner::scan_markdown_files(&vault.path) {
             
             // Pass 2: Check every link in every file
             for file in md_files {
-                if let Ok(content) = std::fs::read_to_string(&file) {
+                if let Ok(content) = tokio::fs::read_to_string(&file).await {
                     let extracted = crate::parser::MarkdownParser::extract_links(&content);
                     let relative_path = file.strip_prefix(&vault.path).unwrap_or(&file).to_string_lossy().to_string();
                     
@@ -806,6 +890,39 @@ up: "[[Main Topic]]"
             "status": "success",
             "dead_links_found": dead_links.len(),
             "dead_links": dead_links
+        }))
+    }
+
+    async fn list_mocs_logic(&self, vault_id: &str) -> Result<serde_json::Value, String> {
+        let config = self.config.read().await;
+        let vaults_to_search: Vec<_> = if vault_id == "all" {
+            config.vaults.iter().collect()
+        } else {
+            vec![config.vaults.iter().find(|v| v.id == vault_id)
+                .ok_or_else(|| format!("Vault {} not found", vault_id))?]
+        };
+            
+        let mut mocs = Vec::new();
+        
+        for vault in vaults_to_search {
+            if let Ok(md_files) = crate::vault::VaultScanner::scan_markdown_files(&vault.path) {
+                for file in md_files {
+                    let rel_path = file.strip_prefix(&vault.path).unwrap_or(&file).to_string_lossy().replace("\\", "/");
+                    let rel_lower = rel_path.to_lowercase();
+                    let stem_lower = file.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                    
+                    if rel_lower.starts_with("mocs/") || rel_lower.contains("/mocs/") || stem_lower.ends_with("moc") || stem_lower == "index" {
+                        mocs.push(json!({
+                            "vault_id": vault.id.clone(),
+                            "file": rel_path
+                        }));
+                    }
+                }
+            }
+        }
+        
+        Ok(json!({
+            "mocs": mocs
         }))
     }
 }

@@ -1,6 +1,7 @@
 use obsidian_mcp::config::{AppConfig, VaultConfig};
 use obsidian_mcp::server::McpServer;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -18,7 +19,7 @@ async fn test_yaml_enforcement() {
         ],
     };
 
-    let server = McpServer::new(Arc::new(RwLock::new(config)));
+    let server = McpServer::new(Arc::new(RwLock::new(config)), std::path::PathBuf::from("dummy.yaml"));
 
     // 1. Missing `up:` key but valid YAML
     let missing_up = serde_json::json!({
@@ -30,7 +31,7 @@ async fn test_yaml_enforcement() {
             "append": false
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(missing_up), serde_json::json!(1));
+    let resp = server.handle_call_tool_for_test(Some(missing_up), serde_json::json!(1)).await;
     assert!(resp.error.is_some());
     assert!(resp.error.unwrap().message.contains("must include at minimum an `up:` field"));
 
@@ -44,7 +45,7 @@ async fn test_yaml_enforcement() {
             "append": false
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(empty_up), serde_json::json!(2));
+    let resp = server.handle_call_tool_for_test(Some(empty_up), serde_json::json!(2)).await;
     assert!(resp.error.is_some());
     assert!(resp.error.unwrap().message.contains("empty")); // Wait, the bouncer message might say "missing `up:`" or similar, need to ensure the implementation handles empty correctly. The current implementation in server.rs line 465 just checks if frontmatter.contains_key("up"), we might need to update the server.rs to enforce it's not empty!
 
@@ -58,7 +59,7 @@ async fn test_yaml_enforcement() {
             "append": false
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(null_up), serde_json::json!(3));
+    let resp = server.handle_call_tool_for_test(Some(null_up), serde_json::json!(3)).await;
     assert!(resp.error.is_some());
     
     // 4. Malformed YAML
@@ -71,7 +72,7 @@ async fn test_yaml_enforcement() {
             "append": false
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(malformed_yaml), serde_json::json!(4));
+    let resp = server.handle_call_tool_for_test(Some(malformed_yaml), serde_json::json!(4)).await;
     assert!(resp.error.is_some());
     assert!(resp.error.unwrap().message.contains("Invalid YAML"));
 }

@@ -1,7 +1,7 @@
 use obsidian_mcp::parser::MarkdownParser;
 
-#[test]
-fn test_complex_markdown_parsing() {
+#[tokio::test]
+async fn test_complex_markdown_parsing() {
     let raw = r#"
 # Intro
 Welcome to the vault.

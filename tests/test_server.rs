@@ -1,6 +1,7 @@
 use obsidian_mcp::config::{AppConfig, VaultConfig};
 use obsidian_mcp::server::McpServer;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -18,7 +19,7 @@ async fn test_foreign_key_constraints() {
         ],
     };
 
-    let server = McpServer::new(Arc::new(RwLock::new(config)));
+    let server = McpServer::new(Arc::new(RwLock::new(config)), std::path::PathBuf::from("dummy.yaml"));
 
     // 1. Create the root Index
     let write_index = serde_json::json!({
@@ -30,7 +31,7 @@ async fn test_foreign_key_constraints() {
             "append": false
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(write_index), serde_json::json!(1));
+    let resp = server.handle_call_tool_for_test(Some(write_index), serde_json::json!(1)).await;
     assert!(resp.error.is_none(), "Failed to create Index.md");
 
     // 2. Try to write a note linking to a missing file (Should fail FK check)
@@ -43,7 +44,7 @@ async fn test_foreign_key_constraints() {
             "append": false
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(write_bad_link), serde_json::json!(2));
+    let resp = server.handle_call_tool_for_test(Some(write_bad_link), serde_json::json!(2)).await;
     assert!(resp.error.is_some());
     assert!(resp.error.unwrap().message.contains("Foreign Key Constraint failed"));
 
@@ -57,7 +58,7 @@ async fn test_foreign_key_constraints() {
             "append": false
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(write_missing), serde_json::json!(3));
+    let resp = server.handle_call_tool_for_test(Some(write_missing), serde_json::json!(3)).await;
     assert!(resp.error.is_none(), "Failed to create Missing Note.md");
 
     // 4. Try again to write note_b.md (Should succeed now)
@@ -70,7 +71,7 @@ async fn test_foreign_key_constraints() {
             "append": false
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(write_good_link), serde_json::json!(4));
+    let resp = server.handle_call_tool_for_test(Some(write_good_link), serde_json::json!(4)).await;
     assert!(resp.error.is_none(), "Failed to write note_b.md after creating dependency");
 
     // 5. Try to delete Missing Note.md (Should fail because note_b links to it)
@@ -81,7 +82,7 @@ async fn test_foreign_key_constraints() {
             "path": "Missing Note.md"
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(delete_dep), serde_json::json!(5));
+    let resp = server.handle_call_tool_for_test(Some(delete_dep), serde_json::json!(5)).await;
     assert!(resp.error.is_some());
     assert!(resp.error.unwrap().message.contains("Foreign Key Constraint failed"));
 
@@ -93,7 +94,7 @@ async fn test_foreign_key_constraints() {
             "path": "note_b.md"
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(delete_child), serde_json::json!(6));
+    let resp = server.handle_call_tool_for_test(Some(delete_child), serde_json::json!(6)).await;
     assert!(resp.error.is_none(), "Failed to delete note_b.md");
 
     // 7. Delete Missing Note.md (Should succeed now that dependent is gone)
@@ -104,6 +105,6 @@ async fn test_foreign_key_constraints() {
             "path": "Missing Note.md"
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(delete_dep_retry), serde_json::json!(7));
+    let resp = server.handle_call_tool_for_test(Some(delete_dep_retry), serde_json::json!(7)).await;
     assert!(resp.error.is_none(), "Failed to delete Missing Note.md after removing dependent");
 }

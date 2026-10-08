@@ -1,6 +1,7 @@
 use obsidian_mcp::config::{AppConfig, VaultConfig};
 use obsidian_mcp::server::McpServer;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tempfile::tempdir;
 use std::fs;
 
@@ -19,7 +20,7 @@ async fn test_search_engine_cases() {
         ],
     };
 
-    let server = McpServer::new(Arc::new(RwLock::new(config)));
+    let server = McpServer::new(Arc::new(RwLock::new(config)), std::path::PathBuf::from("dummy.yaml"));
     
     // Create base files
     let _ = fs::write(dir.path().join("Note1.md"), "---\nup: \"[[Index]]\"\ntags: [secret]\n---\n# Exact Match Query\nHere is a specific word: Excalibur.");
@@ -33,11 +34,14 @@ async fn test_search_engine_cases() {
         }
     });
     
-    let resp = server.handle_call_tool_for_test(Some(search_req), serde_json::json!(1));
+    let resp = server.handle_call_tool_for_test(Some(search_req), serde_json::json!(1)).await;
     assert!(resp.error.is_none());
     
     let result = resp.result.unwrap();
-    let matches = result.get("matches").unwrap().as_array().unwrap();
+    let content_arr = result.get("content").unwrap().as_array().unwrap();
+    let text = content_arr[0].get("text").unwrap().as_str().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+    let matches = parsed.get("results").unwrap().as_array().unwrap();
     
     // Case 1 & 2: Exact match and case insensitive match
     // Currently, search_vault_logic uses ripgrep-style or simple String::contains which is case-sensitive by default unless lowered.
@@ -61,9 +65,12 @@ async fn test_search_engine_cases() {
             "query": "secret"
         }
     });
-    let resp_fm = server.handle_call_tool_for_test(Some(search_fm), serde_json::json!(2));
+    let resp_fm = server.handle_call_tool_for_test(Some(search_fm), serde_json::json!(2)).await;
     let result_fm = resp_fm.result.unwrap();
-    let matches_fm = result_fm.get("matches").unwrap().as_array().unwrap();
+    let content_arr_fm = result_fm.get("content").unwrap().as_array().unwrap();
+    let text_fm = content_arr_fm[0].get("text").unwrap().as_str().unwrap();
+    let parsed_fm: serde_json::Value = serde_json::from_str(text_fm).unwrap();
+    let matches_fm = parsed_fm.get("results").unwrap().as_array().unwrap();
     // Currently the search includes frontmatter because it reads the whole file. 
     // The test case exists to document this requirement.
     assert!(!matches_fm.is_empty());

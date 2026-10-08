@@ -1,6 +1,7 @@
 use obsidian_mcp::config::{AppConfig, VaultConfig};
 use obsidian_mcp::server::McpServer;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tempfile::tempdir;
 use std::fs;
 
@@ -19,7 +20,7 @@ async fn test_creation_fk_constraints() {
         ],
     };
 
-    let server = McpServer::new(Arc::new(RwLock::new(config)));
+    let server = McpServer::new(Arc::new(RwLock::new(config)), std::path::PathBuf::from("dummy.yaml"));
     
     // Setup a valid Index file first
     let _ = fs::write(dir.path().join("Index.md"), "---\nup: \"[[Index]]\"\n---\n");
@@ -34,9 +35,9 @@ async fn test_creation_fk_constraints() {
             "append": false
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(orphan_req), serde_json::json!(1));
+    let resp = server.handle_call_tool_for_test(Some(orphan_req), serde_json::json!(1)).await;
     assert!(resp.error.is_some());
-    assert!(resp.error.unwrap().message.contains("Foreign key violation"));
+    assert!(resp.error.unwrap().message.contains("Foreign Key Constraint failed"));
     
     // Case 2: Self Referencing (is allowed if up is [[test2]]?)
     // Actually, self referencing in up: is fine for the Index file, but generally allowed if the file exists. 
@@ -50,7 +51,7 @@ async fn test_creation_fk_constraints() {
             "append": false
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(self_ref_req), serde_json::json!(2));
+    let resp = server.handle_call_tool_for_test(Some(self_ref_req), serde_json::json!(2)).await;
     // It should allow self-referencing (this is an edge case in our server logic)
     assert!(resp.error.is_none());
     
@@ -65,7 +66,7 @@ async fn test_creation_fk_constraints() {
             "append": false
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(casing_mismatch_req), serde_json::json!(3));
+    let resp = server.handle_call_tool_for_test(Some(casing_mismatch_req), serde_json::json!(3)).await;
     // Should be allowed because of case-insensitive filesystem check
     assert!(resp.error.is_none());
 
@@ -79,6 +80,6 @@ async fn test_creation_fk_constraints() {
             "append": false
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(alias_req), serde_json::json!(4));
+    let resp = server.handle_call_tool_for_test(Some(alias_req), serde_json::json!(4)).await;
     assert!(resp.error.is_none());
 }
