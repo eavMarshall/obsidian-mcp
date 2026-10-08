@@ -32,3 +32,5 @@ config.local.yaml
 ehthumbs.db
 Thumbs.db
 /scratch
+mcp_log.txt
+obsidian-mcp-config.yaml
