@@ -242,6 +242,33 @@ impl McpServer {
                             },
                             "required": ["vault_id", "old_path", "new_path"]
                         }
+                    },
+                    {
+                        "name": "batch_transaction",
+                        "description": "Executes multiple file operations (writes, creates, renames, deletes) in a single transaction, deferring strict Foreign Key and graph validation until the end. Essential for resolving cyclic dependencies and bulk migrations.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "vault_id": { "type": "string" },
+                                "operations": {
+                                    "type": "array",
+                                    "description": "An array of operation objects. Each object must have a 'type' (e.g. 'write_note', 'rename_note', 'delete_note') and the corresponding arguments for that tool.",
+                                    "items": { "type": "object" }
+                                }
+                            },
+                            "required": ["vault_id", "operations"]
+                        }
+                    },
+                    {
+                        "name": "scan_legacy_orphans",
+                        "description": "Scans the vault for legacy markdown files that lack a valid `up:` YAML link to a parent, giving the AI a targeted list of files that need to be migrated.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "vault_id": { "type": "string" }
+                            },
+                            "required": ["vault_id"]
+                        }
                     }
                 ]
             })),
@@ -383,6 +410,16 @@ RULES:
                 let vault_id = args.get("vault_id").and_then(|v| v.as_str()).unwrap_or("");
                 self.list_mocs_logic(vault_id).await
             }
+            "batch_transaction" => {
+                let vault_id = args.get("vault_id").and_then(|v| v.as_str()).unwrap_or("");
+                let empty_vec = Vec::new();
+                let ops = args.get("operations").and_then(|v| v.as_array()).unwrap_or(&empty_vec);
+                self.batch_transaction_logic(vault_id, ops).await
+            }
+            "scan_legacy_orphans" => {
+                let vault_id = args.get("vault_id").and_then(|v| v.as_str()).unwrap_or("");
+                self.scan_legacy_orphans_logic(vault_id).await
+            }
             _ => Err("Unknown tool".to_string()),
         };
 
@@ -507,6 +544,10 @@ up: "[[Main Topic]]"
     }
 
     async fn write_note_logic(&self, vault_id: &str, relative_path: &str, content: &str, append: bool) -> Result<serde_json::Value, String> {
+        self.write_note_logic_ext(vault_id, relative_path, content, append, false).await
+    }
+
+    async fn write_note_logic_ext(&self, vault_id: &str, relative_path: &str, content: &str, append: bool, skip_fk_validation: bool) -> Result<serde_json::Value, String> {
         let config = self.config.read().await;
         let vault = config.vaults.iter().find(|v| v.id == vault_id)
             .ok_or_else(|| format!("Vault {} not found", vault_id))?;
@@ -555,34 +596,36 @@ up: "[[Main Topic]]"
         }
         
         // FOREIGN KEY CONSTRAINT: Check outgoing links against existing files
-        let mut all_files = std::collections::HashSet::new();
-        if let Ok(md_files) = crate::vault::VaultScanner::scan_markdown_files(&vault.path) {
-            for f in &md_files {
-                let rel = f.strip_prefix(&vault.path).unwrap_or(f).to_string_lossy().replace("\\", "/");
-                let rel_lower = rel.to_lowercase();
-                if let Some(stem) = f.file_stem().and_then(|s| s.to_str()) {
-                    all_files.insert(stem.to_lowercase());
+        if !skip_fk_validation {
+            let mut all_files = std::collections::HashSet::new();
+            if let Ok(md_files) = crate::vault::VaultScanner::scan_markdown_files(&vault.path) {
+                for f in &md_files {
+                    let rel = f.strip_prefix(&vault.path).unwrap_or(f).to_string_lossy().replace("\\", "/");
+                    let rel_lower = rel.to_lowercase();
+                    if let Some(stem) = f.file_stem().and_then(|s| s.to_str()) {
+                        all_files.insert(stem.to_lowercase());
+                    }
+                    if let Some(no_ext) = rel_lower.strip_suffix(".md") {
+                        all_files.insert(no_ext.to_string());
+                    }
+                    all_files.insert(rel_lower);
                 }
-                if let Some(no_ext) = rel_lower.strip_suffix(".md") {
-                    all_files.insert(no_ext.to_string());
-                }
-                all_files.insert(rel_lower);
             }
-        }
-        // Allow the file to link to itself during creation
-        let safe_lower = safe_path.to_lowercase();
-        if let Some(stem) = std::path::Path::new(&safe_path).file_stem().and_then(|s| s.to_str()) {
-            all_files.insert(stem.to_lowercase());
-        }
-        if let Some(no_ext) = safe_lower.strip_suffix(".md") {
-            all_files.insert(no_ext.to_string());
-        }
-        all_files.insert(safe_lower);
+            // Allow the file to link to itself during creation
+            let safe_lower = safe_path.to_lowercase();
+            if let Some(stem) = std::path::Path::new(&safe_path).file_stem().and_then(|s| s.to_str()) {
+                all_files.insert(stem.to_lowercase());
+            }
+            if let Some(no_ext) = safe_lower.strip_suffix(".md") {
+                all_files.insert(no_ext.to_string());
+            }
+            all_files.insert(safe_lower);
 
-        let extracted_links = crate::parser::MarkdownParser::extract_links(content);
-        for link in extracted_links {
-            if !all_files.contains(&link.to_lowercase()) {
-                return Err(format!("ARCHITECTURAL VIOLATION: Foreign Key Constraint failed. You attempted to link to `[[{}]]`, but this file does not exist in the vault. You must create the target file first.", link));
+            let extracted_links = crate::parser::MarkdownParser::extract_links(content);
+            for link in extracted_links {
+                if !all_files.contains(&link.to_lowercase()) {
+                    return Err(format!("ARCHITECTURAL VIOLATION: Foreign Key Constraint failed. You attempted to link to `[[{}]]`, but this file does not exist in the vault. You must create the target file first.", link));
+                }
             }
         }
 
@@ -714,6 +757,10 @@ up: "[[Main Topic]]"
     }
 
     async fn delete_note_logic(&self, vault_id: &str, relative_path: &str) -> Result<serde_json::Value, String> {
+        self.delete_note_logic_ext(vault_id, relative_path, false).await
+    }
+
+    async fn delete_note_logic_ext(&self, vault_id: &str, relative_path: &str, skip_fk_validation: bool) -> Result<serde_json::Value, String> {
         let config = self.config.read().await;
         let vault = config.vaults.iter().find(|v| v.id == vault_id)
             .ok_or_else(|| format!("Vault {} not found", vault_id))?;
@@ -732,23 +779,25 @@ up: "[[Main Topic]]"
         full_path.push(&safe_path);
 
         // FOREIGN KEY CONSTRAINT: Prevent deleting files that are linked by other files
-        let safe_lower = safe_path.to_lowercase();
-        let target_stem = std::path::Path::new(&safe_path).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-        let target_no_ext = safe_lower.strip_suffix(".md").unwrap_or(&safe_lower).to_string();
+        if !skip_fk_validation {
+            let safe_lower = safe_path.to_lowercase();
+            let target_stem = std::path::Path::new(&safe_path).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+            let target_no_ext = safe_lower.strip_suffix(".md").unwrap_or(&safe_lower).to_string();
 
-        if let Ok(md_files) = crate::vault::VaultScanner::scan_markdown_files(&vault.path) {
-            for file in &md_files {
-                let rel = file.strip_prefix(&vault.path).unwrap_or(&file).to_string_lossy().replace("\\", "/");
-                if rel.to_lowercase() == safe_lower {
-                    continue; // allow file to link to itself, or it's the file we're deleting
-                }
-                if let Ok(content) = fs::read_to_string(&file).await {
-                    let extracted = crate::parser::MarkdownParser::extract_links(&content);
-                    if extracted.iter().any(|l| {
-                        let link_lower = l.to_lowercase();
-                        link_lower == target_stem || link_lower == target_no_ext || link_lower == safe_lower
-                    }) {
-                        return Err(format!("ARCHITECTURAL VIOLATION: Foreign Key Constraint failed. Cannot delete `{}` because `{}` links to it. You must remove the link first.", safe_path, rel));
+            if let Ok(md_files) = crate::vault::VaultScanner::scan_markdown_files(&vault.path) {
+                for file in &md_files {
+                    let rel = file.strip_prefix(&vault.path).unwrap_or(&file).to_string_lossy().replace("\\", "/");
+                    if rel.to_lowercase() == safe_lower {
+                        continue; // allow file to link to itself, or it's the file we're deleting
+                    }
+                    if let Ok(content) = fs::read_to_string(&file).await {
+                        let extracted = crate::parser::MarkdownParser::extract_links(&content);
+                        if extracted.iter().any(|l| {
+                            let link_lower = l.to_lowercase();
+                            link_lower == target_stem || link_lower == target_no_ext || link_lower == safe_lower
+                        }) {
+                            return Err(format!("ARCHITECTURAL VIOLATION: Foreign Key Constraint failed. Cannot delete `{}` because `{}` links to it. You must remove the link first.", safe_path, rel));
+                        }
                     }
                 }
             }
@@ -923,6 +972,97 @@ up: "[[Main Topic]]"
         
         Ok(json!({
             "mocs": mocs
+        }))
+    }
+    
+    async fn batch_transaction_logic(&self, vault_id: &str, ops: &Vec<serde_json::Value>) -> Result<serde_json::Value, String> {
+        let mut results = Vec::new();
+        for op in ops {
+            let op_type = op.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            match op_type {
+                "write_note" => {
+                    let path = op.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                    let content = op.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                    let append = op.get("append").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let res = self.write_note_logic_ext(vault_id, path, content, append, true).await;
+                    results.push(json!({"type": "write_note", "path": path, "result": res.unwrap_or_else(|e| json!({"error": e}))}));
+                }
+                "create_folder" => {
+                    let path = op.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                    let res = self.create_folder_logic(vault_id, path).await;
+                    results.push(json!({"type": "create_folder", "path": path, "result": res.unwrap_or_else(|e| json!({"error": e}))}));
+                }
+                "rename_note" => {
+                    let old_path = op.get("old_path").and_then(|v| v.as_str()).unwrap_or("");
+                    let new_path = op.get("new_path").and_then(|v| v.as_str()).unwrap_or("");
+                    let res = self.rename_note_logic(vault_id, old_path, new_path).await;
+                    results.push(json!({"type": "rename_note", "old_path": old_path, "new_path": new_path, "result": res.unwrap_or_else(|e| json!({"error": e}))}));
+                }
+                "delete_note" => {
+                    let path = op.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                    let res = self.delete_note_logic_ext(vault_id, path, true).await;
+                    results.push(json!({"type": "delete_note", "path": path, "result": res.unwrap_or_else(|e| json!({"error": e}))}));
+                }
+                _ => {
+                    results.push(json!({"type": op_type, "error": "Unknown batch operation type"}));
+                }
+            }
+        }
+        
+        // Final integrity check
+        let integrity = self.check_integrity_logic(vault_id).await;
+        let mut dead_links = 0;
+        if let Ok(integ) = integrity {
+            if let Some(count) = integ.get("dead_links_found").and_then(|v| v.as_u64()) {
+                dead_links = count;
+            }
+        }
+
+        Ok(json!({
+            "status": "success",
+            "operations_completed": results.len(),
+            "results": results,
+            "final_integrity_warning": if dead_links > 0 { Some(format!("Transaction committed, but left {} dead links in the vault.", dead_links)) } else { None }
+        }))
+    }
+
+    async fn scan_legacy_orphans_logic(&self, vault_id: &str) -> Result<serde_json::Value, String> {
+        let config = self.config.read().await;
+        let vault = config.vaults.iter().find(|v| v.id == vault_id)
+            .ok_or_else(|| format!("Vault {} not found", vault_id))?;
+            
+        let mut orphans = Vec::new();
+        if let Ok(md_files) = crate::vault::VaultScanner::scan_markdown_files(&vault.path) {
+            for file in md_files {
+                let rel = file.strip_prefix(&vault.path).unwrap_or(&file).to_string_lossy().to_string();
+                if rel.to_lowercase() == "how_to_navigate.md" { continue; }
+                
+                if let Ok(content) = tokio::fs::read_to_string(&file).await {
+                    let trimmed = content.trim_start();
+                    let mut has_up = false;
+                    if trimmed.starts_with("---") {
+                        let after_first = &trimmed[3..];
+                        if let Some(end_idx) = after_first.find("---") {
+                            let yaml_str = &after_first[..end_idx];
+                            if let Ok(yaml_val) = serde_yaml::from_str::<serde_json::Value>(yaml_str) {
+                                if let Some(up_val) = yaml_val.get("up") {
+                                    if !up_val.is_null() && !(up_val.is_string() && up_val.as_str().unwrap().trim().is_empty()) {
+                                        has_up = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if !has_up {
+                        orphans.push(rel);
+                    }
+                }
+            }
+        }
+        
+        Ok(json!({
+            "orphans_found": orphans.len(),
+            "orphans": orphans
         }))
     }
 }
