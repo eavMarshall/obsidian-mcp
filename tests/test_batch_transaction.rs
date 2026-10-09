@@ -23,11 +23,11 @@ async fn test_batch_transaction() {
     let server = McpServer::new(Arc::new(RwLock::new(config)), std::path::PathBuf::from("dummy.yaml"));
     
     // Create an initial Index file manually
-    fs::write(dir.path().join("Index.md"), "---\nup: \"[[Index]]\"\n---\n").unwrap();
+    fs::write(dir.path().join("_index.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]").unwrap();
 
     // Call batch_transaction with operations that would normally fail FK checks if done individually
     // op1: Create A.md with up: B.md
-    // op2: Create B.md with up: Index.md
+    // op2: Create B.md with up: _index.md
     
     let batch_req = serde_json::json!({
         "name": "batch_transaction",
@@ -37,13 +37,13 @@ async fn test_batch_transaction() {
                 {
                     "type": "write_note",
                     "path": "A.md",
-                    "content": "---\nup: \"[[B]]\"\n---\n",
+                    "content": "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[B]]",
                     "append": false
                 },
                 {
                     "type": "write_note",
                     "path": "B.md",
-                    "content": "---\nup: \"[[Index]]\"\n---\n",
+                    "content": "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]",
                     "append": false
                 }
             ]
@@ -89,7 +89,7 @@ async fn test_batch_transaction_with_dead_links() {
     let server = McpServer::new(Arc::new(RwLock::new(config)), std::path::PathBuf::from("dummy.yaml"));
     
     // Create an initial Index file manually
-    fs::write(dir.path().join("Index.md"), "---\nup: \"[[Index]]\"\n---\n").unwrap();
+    fs::write(dir.path().join("_index.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]").unwrap();
 
     let batch_req = serde_json::json!({
         "name": "batch_transaction",
@@ -99,7 +99,7 @@ async fn test_batch_transaction_with_dead_links() {
                 {
                     "type": "write_note",
                     "path": "A.md",
-                    "content": "---\nup: \"[[NonExistentFile]]\"\n---\n",
+                    "content": "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[NonExistentFile]]",
                     "append": false
                 }
             ]

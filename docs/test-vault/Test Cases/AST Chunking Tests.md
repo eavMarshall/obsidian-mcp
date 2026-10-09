@@ -1,6 +1,10 @@
 ---
-up: "[[Index]]"
+title: "AST Chunking Tests"
+tags: []
+summary: ""
 ---
+Part of [[_index]]
+
 # AST Chunking Tests
 
 - [x] `Case 1: Multiple H1 headers` - Implemented in `tests/test_ast_chunking.rs`

@@ -1,6 +1,10 @@
 ---
-up: "[[Index]]"
+title: "Integrity Scan Tests"
+tags: []
+summary: ""
 ---
+Part of [[_index]]
+
 # Integrity Scan Tests
 
 - [x] `Case 1: Orphaned backlink detection` - Implemented in `tests/test_integrity_scan.rs`

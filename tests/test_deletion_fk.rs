@@ -23,9 +23,9 @@ async fn test_deletion_fk_constraints() {
     let server = McpServer::new(Arc::new(RwLock::new(config)), std::path::PathBuf::from("dummy.yaml"));
     
     // Create base files
-    let _ = fs::write(dir.path().join("Index.md"), "---\nup: \"[[Index]]\"\n---\n# Root");
-    let _ = fs::write(dir.path().join("TargetNote.md"), "---\nup: \"[[Index]]\"\n---\n# Target");
-    let _ = fs::write(dir.path().join("SourceNote.md"), "---\nup: \"[[Index]]\"\n---\n# Source\n[[TargetNote]]");
+    let _ = fs::write(dir.path().join("_index.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]# Root");
+    let _ = fs::write(dir.path().join("TargetNote.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]# Target");
+    let _ = fs::write(dir.path().join("SourceNote.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]# Source\n[[TargetNote]]");
     let _ = fs::write(dir.path().join("_VAULT_RULES.md"), "Rules file");
 
     // Case 1: Delete note with active backlinks (TargetNote is linked by SourceNote)

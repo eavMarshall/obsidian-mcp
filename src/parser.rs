@@ -25,21 +25,25 @@ impl MarkdownParser {
 
         for (event, range) in parser {
             match event {
-                Event::Start(Tag::Heading { .. }) => {
-                    let chunk_end_offset = range.start;
-                    if chunk_start_offset < chunk_end_offset {
-                        let content = &markdown[chunk_start_offset..chunk_end_offset];
-                        if !content.trim().is_empty() {
-                            chunks.push(Chunk {
-                                header: std::borrow::Cow::Owned(std::mem::take(&mut current_header)),
-                                content: content.trim(),
-                            });
+                Event::Start(Tag::Heading { .. }) | Event::Start(Tag::Heading(..)) => {
+                    let header_text = &markdown[range.start..range.end];
+                    let is_case = header_text.starts_with("## ") || header_text.starts_with("### ") || header_text.starts_with("##\t") || header_text.starts_with("###\t");
+                    if is_case {
+                        let chunk_end_offset = range.start;
+                        if chunk_start_offset < chunk_end_offset {
+                            let content = &markdown[chunk_start_offset..chunk_end_offset];
+                            if !content.trim().is_empty() {
+                                chunks.push(Chunk {
+                                    header: std::borrow::Cow::Owned(std::mem::take(&mut current_header)),
+                                    content: content.trim(),
+                                });
+                            }
                         }
+                        
+                        chunk_start_offset = range.start;
+                        current_header.clear();
+                        in_header = true;
                     }
-                    
-                    chunk_start_offset = range.start;
-                    current_header.clear();
-                    in_header = true;
                 }
                 Event::End(TagEnd::Heading(_)) => {
                     if in_header {
@@ -113,10 +117,9 @@ impl MarkdownParser {
             
             if !is_in_code {
                 if let Some(matched) = cap.get(1) {
-                    let link_core = matched.as_str().split('|').next().unwrap_or("").trim();
-                    let link_base = link_core.split('#').next().unwrap_or("").trim().to_string();
-                    if !link_base.is_empty() {
-                        links.push(link_base);
+                    let link_core = matched.as_str().split('|').next().unwrap_or("").trim().to_string();
+                    if !link_core.is_empty() && !link_core.starts_with("obsidian://") {
+                        links.push(link_core);
                     }
                 }
             }

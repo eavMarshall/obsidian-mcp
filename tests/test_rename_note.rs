@@ -21,18 +21,18 @@ async fn test_rename_note_auto_updates_links() {
 
     let server = McpServer::new(Arc::new(RwLock::new(config)), std::path::PathBuf::from("dummy.yaml"));
 
-    // 1. Create Index.md
+    // 1. Create _index.md
     let write_index = serde_json::json!({
         "name": "write_note",
         "arguments": {
             "vault_id": "test_vault",
-            "path": "Index.md",
-            "content": "---\nup: \"[[Index]]\"\n---\nRoot",
+            "path": "_index.md",
+            "content": "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]Root",
             "append": false
         }
     });
     let resp1 = server.handle_call_tool_for_test(Some(write_index), serde_json::json!(1)).await;
-    assert!(resp1.error.is_none(), "Failed to create Index.md: {:?}", resp1.error);
+    assert!(resp1.error.is_none(), "Failed to create _index.md: {:?}", resp1.error);
 
     // 2. Create Target.md
     let write_target = serde_json::json!({
@@ -40,7 +40,7 @@ async fn test_rename_note_auto_updates_links() {
         "arguments": {
             "vault_id": "test_vault",
             "path": "Target.md",
-            "content": "---\nup: \"[[Index]]\"\n---\nI am the target.",
+            "content": "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]I am the target.",
             "append": false
         }
     });
@@ -53,7 +53,7 @@ async fn test_rename_note_auto_updates_links() {
         "arguments": {
             "vault_id": "test_vault",
             "path": "Dependent.md",
-            "content": "---\nup: \"[[Target]]\"\n---\nI link to [[Target]] and also [[Target|Alias]] and [[Target#Header]].",
+            "content": "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[Target]]I link to [[Target]] and also [[Target|Alias]] and [[Target#Header]].",
             "append": false
         }
     });

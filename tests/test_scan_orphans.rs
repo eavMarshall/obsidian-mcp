@@ -23,21 +23,21 @@ async fn test_scan_legacy_orphans() {
     let server = McpServer::new(Arc::new(RwLock::new(config)), std::path::PathBuf::from("dummy.yaml"));
     
     // Create some files
-    // 1. Valid file with up
-    fs::write(dir.path().join("Valid.md"), "---\nup: \"[[Index]]\"\n---\n").unwrap();
+    // 1. Valid file with Part of
+    fs::write(dir.path().join("Valid.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]").unwrap();
     
-    // 2. Orphan file with no frontmatter
+    // 2. Orphan file with no frontmatter and no Part of
     fs::write(dir.path().join("OrphanNoFrontmatter.md"), "# Just a file").unwrap();
     
-    // 3. Orphan file with frontmatter but no up
-    fs::write(dir.path().join("OrphanNoUp.md"), "---\ntags: [test]\n---\n# Just a file").unwrap();
+    // 3. Orphan file with frontmatter but no Part of
+    fs::write(dir.path().join("OrphanNoParent.md"), "---\ntitle: \"test\"\n---\n# Just a file").unwrap();
     
-    // 4. Orphan file with empty up
-    fs::write(dir.path().join("OrphanEmptyUp.md"), "---\nup: \n---\n").unwrap();
+    // 4. Implicit valid file (due to _index.md in folder)
+    let sub = dir.path().join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    fs::write(sub.join("_index.md"), "---\ntitle: \"Index\"\n---\n").unwrap();
+    fs::write(sub.join("ImplicitValid.md"), "---\ntitle: \"Sub\"\n---\nBody").unwrap();
 
-    // 5. Orphan file with up: ""
-    fs::write(dir.path().join("OrphanEmptyStringUp.md"), "---\nup: \"\"\n---\n").unwrap();
-    
     let scan_req = serde_json::json!({
         "name": "scan_legacy_orphans",
         "arguments": {
@@ -55,14 +55,13 @@ async fn test_scan_legacy_orphans() {
     let result_map = parsed.as_object().unwrap();
     
     let orphans_found = result_map.get("orphans_found").unwrap().as_i64().unwrap();
-    assert_eq!(orphans_found, 4); // 4 orphans created above
+    assert_eq!(orphans_found, 2); 
     
     let orphans = result_map.get("orphans").unwrap().as_array().unwrap();
     let orphan_names: Vec<&str> = orphans.iter().map(|v| v.as_str().unwrap()).collect();
     
     assert!(orphan_names.iter().any(|n| n.contains("OrphanNoFrontmatter.md")));
-    assert!(orphan_names.iter().any(|n| n.contains("OrphanNoUp.md")));
-    assert!(orphan_names.iter().any(|n| n.contains("OrphanEmptyUp.md")));
-    assert!(orphan_names.iter().any(|n| n.contains("OrphanEmptyStringUp.md")));
+    assert!(orphan_names.iter().any(|n| n.contains("OrphanNoParent.md")));
     assert!(!orphan_names.iter().any(|n| n.contains("Valid.md")));
+    assert!(!orphan_names.iter().any(|n| n.contains("ImplicitValid.md")));
 }

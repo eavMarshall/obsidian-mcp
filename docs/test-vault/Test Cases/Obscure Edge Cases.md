@@ -1,6 +1,10 @@
 ---
-up: "[[Index]]"
+title: "Obscure Edge Cases"
+tags: []
+summary: ""
 ---
+Part of [[_index]]
+
 # Edge Cases & OS Quirks
 
 - `Case 1: Deep Nested Folders`

@@ -23,10 +23,10 @@ async fn test_integrity_scan_cases() {
     let server = McpServer::new(Arc::new(RwLock::new(config)), std::path::PathBuf::from("dummy.yaml"));
     
     // Create base files
-    let _ = fs::write(dir.path().join("Index.md"), "---\nup: \"[[Index]]\"\n---\n# Root\n[[DanglingLink]]\n[[EmptyNote]]");
-    let _ = fs::write(dir.path().join("ValidNote.md"), "---\nup: \"[[Index]]\"\n---\n# Valid");
-    let _ = fs::write(dir.path().join("OrphanNote.md"), "---\nup: \"[[Index]]\"\n---\n# Orphan\nNo links to this.");
-    let _ = fs::write(dir.path().join("EmptyNote.md"), "---\nup: \"[[Index]]\"\n---\n"); // Empty headers test case
+    let _ = fs::write(dir.path().join("_index.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]# Root\n[[DanglingLink]]\n[[EmptyNote]]");
+    let _ = fs::write(dir.path().join("ValidNote.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]# Valid");
+    let _ = fs::write(dir.path().join("OrphanNote.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]# Orphan\nNo links to this.");
+    let _ = fs::write(dir.path().join("EmptyNote.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]"); // Empty headers test case
 
     let integrity_req = serde_json::json!({
         "name": "check_integrity",

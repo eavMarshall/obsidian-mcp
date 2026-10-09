@@ -221,7 +221,7 @@ impl McpServer {
                     },
                     {
                         "name": "list_mocs",
-                        "description": "Returns a list of all structural Maps of Content (MOCs) or index files to help the AI satisfy the 'up:' link constraints",
+                        "description": "Returns a list of all structural Maps of Content (MOCs) or index files to help the AI satisfy the parent linking constraints",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
@@ -261,7 +261,7 @@ impl McpServer {
                     },
                     {
                         "name": "scan_legacy_orphans",
-                        "description": "Scans the vault for legacy markdown files that lack a valid `up:` YAML link to a parent, giving the AI a targeted list of files that need to be migrated.",
+                        "description": "Scans the vault for legacy markdown files that lack a valid parent link (`Part of [[...]]` or implicit `_index.md`), giving the AI a targeted list of files that need to be migrated.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
@@ -315,15 +315,16 @@ RULES:
    - `/Sources`: Raw unprocessed data or external highlights.
    - `/Logs`: Chronological append-only entries (meetings, daily notes).
    Remember: Operational/working files can live anywhere, but they MUST connect back to the core knowledge graph.
-3. STRUCTURAL METADATA (YAML): Every single file (whether a concept, test case, or script) must begin with valid YAML containing at minimum the `up:` field which links to its parent category or MOC.
+3. STRUCTURAL METADATA (YAML): Every single file must begin with valid YAML. Expected keys are `title`, `tags`, and `summary`. `code`, `file`, and `area` are optionally allowed. No other keys are permitted.
    Example:
    ---
-   up: "[[Main Topic]]"
-   related: "[[Lateral Topic]]"
+   title: "My Topic"
+   tags: ["topic"]
+   summary: "A brief summary"
    ---
-4. NO ORPHANS: Every new file must link UP to at least one broader parent node (`up:`). Unlinked nodes are strictly prohibited.
+4. NO ORPHANS: Every new file must link UP to a parent node. This is taken from the folder's `_index.md`, or from the body's `Part of [[...]]` line. `up:` in frontmatter is forbidden.
 5. CONTEXTUAL LINKS: Use standard [[WikiLinks]] in the body text for human-readable context. Never drop an isolated link without surrounding text explaining the relationship.
-6. APPEND > REWRITE: To save token bandwidth, try to append to existing files instead of rewriting large monolithic documents."#;
+6. NOTES ARE TOPICS: A note is a topic holding many cases. There is no word limit and no need for atomic splitting. Chunking is done automatically on case headings (##/###)."#;
 
         JsonRpcResponse {
             jsonrpc: "2.0".to_string(),
@@ -465,19 +466,14 @@ RULES:
 
 ## 1. How to Traverse (For Humans)
 If you are not using AI tools to navigate, here is the easiest way to traverse the vault:
-- **Start at the MOCs:** Begin in the `/MOCs` directory or the root `Index.md` (if it exists). These act as dashboards grouping links to related concepts.
-- **Follow the `up:` Links (Bottom-Up):** If you land on a deeply nested note inside `/Concepts`, look at the `up:` link in the YAML frontmatter to zoom out to its parent category. No note is an orphan; you can always find your way back up.
+- **Start at the MOCs:** Begin in the `/MOCs` directory or the root `_index.md` (if it exists). These act as dashboards grouping links to related concepts.
+- **Follow the Parent Links (Bottom-Up):** If you land on a deeply nested note, look for a `Part of [[...]]` line in the body or the folder's `_index.md` to zoom out to its parent category. No note is an orphan; you can always find your way back up.
 - **Lateral Links & Backlinks:** Use standard `[[WikiLinks]]` in the body text to explore laterally. Use your markdown editor's **Backlinks pane** to see every atomic concept that mentions the note you are currently viewing.
 
-## 2. Core Ontological Zones (For Manual Edits)
-If you add files manually, pure knowledge must be strictly organized into these root directories:
-- `/MOCs`: Maps of Content (navigational hubs)
-- `/Concepts`: Pure atomic knowledge (one indivisible idea per file, usually under 200 words)
-- `/Entities`: Real-world instantiations (people, codebase mappings, projects)
-- `/Sources`: Raw unprocessed data, articles, or web clippings
-- `/Logs`: Chronological append-only entries (daily journals, meetings)
+## 2. Folder Structure
+Notes are topics that hold many cases. Use folders freely to organize them.
 
-*Note: You may create any other folders you need for active operational work (e.g., `/Test Cases`, `/Drafts`).*
+
 
 ## 3. The Mandatory YAML Link
 Every single markdown file in this vault **MUST** include YAML frontmatter linking it back to a parent concept in the Knowledge Graph. 
@@ -485,9 +481,12 @@ Every single markdown file in this vault **MUST** include YAML frontmatter linki
 Example:
 ```yaml
 ---
-up: "[[Main Topic]]"
+title: "Main Topic"
+tags: []
+summary: "Summary here"
 ---
 ```
+Part of [[Main Topic]]
 "#;
                 let _ = fs::write(nav_path, nav_content).await;
             }
@@ -566,7 +565,13 @@ up: "[[Main Topic]]"
         let mut full_path = std::path::PathBuf::from(&vault.path);
         full_path.push(&safe_path);
         
-        if !append {
+        let mut is_exempt = false;
+        let lower_safe = safe_path.to_lowercase();
+        if lower_safe.starts_with(".obsidian/") || lower_safe.contains("/.obsidian/") || lower_safe.starts_with("tests/") || lower_safe.contains("/tests/") {
+            is_exempt = true;
+        }
+
+        if !append && !is_exempt {
             let trimmed_content = content.trim_start();
             if !trimmed_content.starts_with("---") {
                 return Err("ARCHITECTURAL VIOLATION: Every new or overwritten file must contain valid YAML frontmatter at the very top, starting with `---`.".to_string());
@@ -578,12 +583,18 @@ up: "[[Main Topic]]"
                 let yaml_str = &content_after_first[..end_idx];
                 match serde_yaml::from_str::<serde_json::Value>(yaml_str) {
                     Ok(yaml_val) => {
-                        if let Some(up_val) = yaml_val.get("up") {
-                            if up_val.is_null() || (up_val.is_string() && up_val.as_str().unwrap().trim().is_empty()) {
-                                return Err("ARCHITECTURAL VIOLATION: The `up:` field in the YAML frontmatter cannot be empty or null.".to_string());
+                        if yaml_val.get("up").is_some() {
+                            return Err("ARCHITECTURAL VIOLATION: The `up:` frontmatter field is deprecated. Use `Part of [[...]]` in the body or rely on the folder's `_index.md`.".to_string());
+                        }
+                        if let Some(obj) = yaml_val.as_mapping() {
+                            let expected = ["title", "tags", "summary", "code", "file", "area"];
+                            for key in obj.keys() {
+                                if let Some(k_str) = key.as_str() {
+                                    if !expected.contains(&k_str) {
+                                        return Err(format!("ARCHITECTURAL VIOLATION: Frontmatter key '{}' is not allowed. Expected keys: title, tags, summary, code, file, area.", k_str));
+                                    }
+                                }
                             }
-                        } else {
-                            return Err("ARCHITECTURAL VIOLATION: Every new or overwritten file must include at minimum an `up:` field linking to its parent node or MOC (e.g. `up: \"[[Parent Topic]]\"`). No orphans allowed.".to_string());
                         }
                     },
                     Err(e) => {
@@ -596,7 +607,7 @@ up: "[[Main Topic]]"
         }
         
         // FOREIGN KEY CONSTRAINT: Check outgoing links against existing files
-        if !skip_fk_validation {
+        if !skip_fk_validation && !is_exempt {
             let mut all_files = std::collections::HashSet::new();
             if let Ok(md_files) = crate::vault::VaultScanner::scan_markdown_files(&vault.path) {
                 for f in &md_files {
@@ -622,8 +633,42 @@ up: "[[Main Topic]]"
             all_files.insert(safe_lower);
 
             let extracted_links = crate::parser::MarkdownParser::extract_links(content);
+            let has_part_of = content.contains("Part of [[");
+            let is_index = safe_path.to_lowercase().ends_with("_index.md");
+            
+            if !has_part_of && !is_index {
+                let mut index_path = std::path::PathBuf::from(&vault.path);
+                if let Some(parent) = std::path::Path::new(&safe_path).parent() {
+                    index_path.push(parent);
+                }
+                index_path.push("_index.md");
+                
+                if !index_path.exists() {
+                     return Err("ARCHITECTURAL VIOLATION: Parent _index.md not found in the folder. You must create it first or use `Part of [[...]]` in the body.".to_string());
+                }
+            }
             for link in extracted_links {
-                if !all_files.contains(&link.to_lowercase()) {
+                if link.starts_with("obsidian://") { continue; }
+                let mut target_file = link.as_str();
+                if let Some((f, _)) = link.split_once('#') {
+                    target_file = f;
+                }
+                
+                let mut effective_target = target_file.to_string();
+                if target_file.to_lowercase() == "_index" {
+                    if let Some(parent) = std::path::Path::new(&safe_path).parent() {
+                        let parent_str = parent.to_string_lossy().replace("\\\\", "/");
+                        if !parent_str.is_empty() {
+                            effective_target = format!("{}/_index", parent_str);
+                        }
+                    }
+                }
+                
+                if effective_target.is_empty() {
+                    effective_target = safe_path.clone();
+                }
+                
+                if !all_files.contains(&effective_target.to_lowercase()) {
                     return Err(format!("ARCHITECTURAL VIOLATION: Foreign Key Constraint failed. You attempted to link to `[[{}]]`, but this file does not exist in the vault. You must create the target file first.", link));
                 }
             }
@@ -779,7 +824,7 @@ up: "[[Main Topic]]"
         full_path.push(&safe_path);
 
         // FOREIGN KEY CONSTRAINT: Prevent deleting files that are linked by other files
-        if !skip_fk_validation {
+        if !skip_fk_validation && !is_exempt {
             let safe_lower = safe_path.to_lowercase();
             let target_stem = std::path::Path::new(&safe_path).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
             let target_no_ext = safe_lower.strip_suffix(".md").unwrap_or(&safe_lower).to_string();
@@ -893,54 +938,92 @@ up: "[[Main Topic]]"
     }
 
     async fn check_integrity_logic(&self, vault_id: &str) -> Result<serde_json::Value, String> {
+    async fn check_integrity_logic(&self, vault_id: &str) -> Result<serde_json::Value, String> {
         let config = self.config.read().await;
         let vault = config.vaults.iter().find(|v| v.id == vault_id)
             .ok_or_else(|| format!("Vault {} not found", vault_id))?;
             
         let mut dead_links = Vec::new();
-        let mut all_files = std::collections::HashSet::new();
+        let mut all_files = std::collections::HashMap::new();
         
-        // Pass 1: Collect all valid files (including attachments) and their path variants
         for entry in walkdir::WalkDir::new(&vault.path).into_iter().filter_map(|e| e.ok()) {
             if entry.path().is_file() {
+                let path_buf = entry.path().to_path_buf();
                 if let Some(stem) = entry.path().file_stem().and_then(|s| s.to_str()) {
-                    all_files.insert(stem.to_lowercase());
+                    all_files.insert(stem.to_lowercase(), path_buf.clone());
                 }
-                let rel = entry.path().strip_prefix(&vault.path).unwrap_or(entry.path()).to_string_lossy().replace("\\", "/");
+                let rel = entry.path().strip_prefix(&vault.path).unwrap_or(entry.path()).to_string_lossy().replace("\\\\", "/");
                 let rel_lower = rel.to_lowercase();
-                all_files.insert(rel_lower.clone());
+                all_files.insert(rel_lower.clone(), path_buf.clone());
                 if let Some((no_ext, _)) = rel_lower.rsplit_once('.') {
-                    all_files.insert(no_ext.to_string());
+                    all_files.insert(no_ext.to_string(), path_buf.clone());
                 }
             }
         }
         
         if let Ok(md_files) = crate::vault::VaultScanner::scan_markdown_files(&vault.path) {
-            
-            // Pass 2: Check every link in every file
             for file in md_files {
                 if let Ok(content) = tokio::fs::read_to_string(&file).await {
                     let extracted = crate::parser::MarkdownParser::extract_links(&content);
-                    let relative_path = file.strip_prefix(&vault.path).unwrap_or(&file).to_string_lossy().to_string();
+                    let relative_path = file.strip_prefix(&vault.path).unwrap_or(&file).to_string_lossy().replace("\\\\", "/").to_string();
                     
                     for link in extracted {
-                        if !all_files.contains(&link.to_lowercase()) {
-                            dead_links.push(json!({
+                        if link.starts_with("obsidian://") { continue; }
+                        
+                        let mut target_file = link.as_str();
+                        let mut target_heading = None;
+                        if let Some((f, h)) = link.split_once('#') {
+                            target_file = f;
+                            target_heading = Some(h);
+                        }
+                        
+                        let mut effective_target = target_file.to_string();
+                        if target_file.to_lowercase() == "_index" {
+                            if let Some(parent) = std::path::Path::new(&relative_path).parent() {
+                                let parent_str = parent.to_string_lossy().replace("\\\\", "/");
+                                if !parent_str.is_empty() {
+                                    effective_target = format!("{}/_index", parent_str);
+                                }
+                            }
+                        }
+                        
+                        if effective_target.is_empty() {
+                            effective_target = relative_path.clone();
+                        }
+                        
+                        if let Some(actual_path) = all_files.get(&effective_target.to_lowercase()) {
+                            if let Some(heading) = target_heading {
+                                if let Ok(target_content) = std::fs::read_to_string(actual_path) {
+                                    let heading_lower = heading.to_lowercase();
+                                    let content_lower = target_content.to_lowercase();
+                                    if !content_lower.contains(&heading_lower) {
+                                        dead_links.push(serde_json::json!({
+                                            "source_file": relative_path,
+                                            "broken_link": link,
+                                            "reason": "Heading not found"
+                                        }));
+                                    }
+                                }
+                            }
+                        } else {
+                            dead_links.push(serde_json::json!({
                                 "source_file": relative_path,
-                                "broken_link": link
+                                "broken_link": link,
+                                "reason": "File not found"
                             }));
                         }
                     }
                 }
             }
         }
-
-        Ok(json!({
+        
+        Ok(serde_json::json!({
             "status": "success",
             "dead_links_found": dead_links.len(),
             "dead_links": dead_links
         }))
     }
+}
 
     async fn list_mocs_logic(&self, vault_id: &str) -> Result<serde_json::Value, String> {
         let config = self.config.read().await;
@@ -960,7 +1043,7 @@ up: "[[Main Topic]]"
                     let rel_lower = rel_path.to_lowercase();
                     let stem_lower = file.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
                     
-                    if rel_lower.starts_with("mocs/") || rel_lower.contains("/mocs/") || stem_lower.ends_with("moc") || stem_lower == "index" {
+                    if rel_lower.starts_with("mocs/") || rel_lower.contains("/mocs/") || stem_lower.ends_with("moc") || stem_lower == "_index" {
                         mocs.push(json!({
                             "vault_id": vault.id.clone(),
                             "file": rel_path
@@ -1038,22 +1121,17 @@ up: "[[Main Topic]]"
                 if rel.to_lowercase() == "how_to_navigate.md" { continue; }
                 
                 if let Ok(content) = tokio::fs::read_to_string(&file).await {
-                    let trimmed = content.trim_start();
-                    let mut has_up = false;
-                    if trimmed.starts_with("---") {
-                        let after_first = &trimmed[3..];
-                        if let Some(end_idx) = after_first.find("---") {
-                            let yaml_str = &after_first[..end_idx];
-                            if let Ok(yaml_val) = serde_yaml::from_str::<serde_json::Value>(yaml_str) {
-                                if let Some(up_val) = yaml_val.get("up") {
-                                    if !up_val.is_null() && !(up_val.is_string() && up_val.as_str().unwrap().trim().is_empty()) {
-                                        has_up = true;
-                                    }
-                                }
-                            }
+                    let has_part_of = content.contains("Part of [[");
+                    let is_index = rel.to_lowercase().ends_with("_index.md");
+                    
+                    let mut has_implicit_parent = false;
+                    if let Some(parent) = file.parent() {
+                        if parent.join("_index.md").exists() {
+                            has_implicit_parent = true;
                         }
                     }
-                    if !has_up {
+                    
+                    if !has_part_of && !is_index && !has_implicit_parent {
                         orphans.push(rel);
                     }
                 }

@@ -9,8 +9,15 @@ impl VaultScanner {
     pub fn scan_markdown_files<P: AsRef<Path>>(vault_path: P) -> Result<Vec<PathBuf>> {
         let mut markdown_files = Vec::new();
         
-        for entry in WalkDir::new(vault_path).into_iter().filter_map(|e| e.ok()) {
+        for entry in WalkDir::new(vault_path.as_ref()).into_iter().filter_map(|e| e.ok()) {
             let path = entry.path();
+            
+            // Apply exemption rules
+            let path_str = path.to_string_lossy().replace("\\", "/");
+            if path_str.contains("/.obsidian/") || path_str.contains("/tests/") {
+                continue;
+            }
+            
             if path.is_file() {
                 if let Some(ext) = path.extension() {
                     if ext == "md" {

@@ -1,6 +1,10 @@
 ---
-up: "[[Index]]"
+title: "YAML Validation"
+tags: []
+summary: ""
 ---
+Part of [[_index]]
+
 # YAML Validation
 
 - `Case 1: No YAML`

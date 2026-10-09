@@ -23,8 +23,8 @@ async fn test_search_engine_cases() {
     let server = McpServer::new(Arc::new(RwLock::new(config)), std::path::PathBuf::from("dummy.yaml"));
     
     // Create base files
-    let _ = fs::write(dir.path().join("Note1.md"), "---\nup: \"[[Index]]\"\ntags: [secret]\n---\n# Exact Match Query\nHere is a specific word: Excalibur.");
-    let _ = fs::write(dir.path().join("Note2.md"), "---\nup: \"[[Index]]\"\n---\n# Case Insensitive\nHere is EXCALIBUR again.");
+    let _ = fs::write(dir.path().join("Note1.md"), "---\nup: \"[[_index]]\"\ntags: [secret]\n---\n# Exact Match Query\nHere is a specific word: Excalibur.");
+    let _ = fs::write(dir.path().join("Note2.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]# Case Insensitive\nHere is EXCALIBUR again.");
 
     let search_req = serde_json::json!({
         "name": "search_vault",

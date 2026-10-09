@@ -26,13 +26,13 @@ async fn test_foreign_key_constraints() {
         "name": "write_note",
         "arguments": {
             "vault_id": "test_vault",
-            "path": "Index.md",
-            "content": "---\nup: \"[[Index]]\"\n---\nRoot",
+            "path": "_index.md",
+            "content": "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]Root",
             "append": false
         }
     });
     let resp = server.handle_call_tool_for_test(Some(write_index), serde_json::json!(1)).await;
-    assert!(resp.error.is_none(), "Failed to create Index.md");
+    assert!(resp.error.is_none(), "Failed to create _index.md");
 
     // 2. Try to write a note linking to a missing file (Should fail FK check)
     let write_bad_link = serde_json::json!({
@@ -40,7 +40,7 @@ async fn test_foreign_key_constraints() {
         "arguments": {
             "vault_id": "test_vault",
             "path": "note_b.md",
-            "content": "---\nup: \"[[Index]]\"\n---\nThis links to [[Missing Note]]",
+            "content": "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]This links to [[Missing Note]]",
             "append": false
         }
     });
@@ -54,7 +54,7 @@ async fn test_foreign_key_constraints() {
         "arguments": {
             "vault_id": "test_vault",
             "path": "Missing Note.md",
-            "content": "---\nup: \"[[Index]]\"\n---\nI exist now",
+            "content": "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]I exist now",
             "append": false
         }
     });
@@ -67,7 +67,7 @@ async fn test_foreign_key_constraints() {
         "arguments": {
             "vault_id": "test_vault",
             "path": "note_b.md",
-            "content": "---\nup: \"[[Index]]\"\n---\nThis links to [[Missing Note]]",
+            "content": "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]This links to [[Missing Note]]",
             "append": false
         }
     });

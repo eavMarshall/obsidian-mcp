@@ -1,6 +1,10 @@
 ---
-up: "[[Index]]"
+title: "Deletion FK Constraints"
+tags: []
+summary: ""
 ---
+Part of [[_index]]
+
 # Deletion FK constraints
 
 - [x] `Case 1: Delete note with active backlinks` - Implemented in `tests/test_deletion_fk.rs`

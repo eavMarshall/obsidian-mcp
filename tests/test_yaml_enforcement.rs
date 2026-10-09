@@ -21,8 +21,8 @@ async fn test_yaml_enforcement() {
 
     let server = McpServer::new(Arc::new(RwLock::new(config)), std::path::PathBuf::from("dummy.yaml"));
 
-    // 1. Missing `up:` key but valid YAML
-    let missing_up = serde_json::json!({
+    // 1. Missing parent linking in body or implicit folder _index
+    let missing_parent = serde_json::json!({
         "name": "write_note",
         "arguments": {
             "vault_id": "test_vault",
@@ -31,36 +31,37 @@ async fn test_yaml_enforcement() {
             "append": false
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(missing_up), serde_json::json!(1)).await;
+    let resp = server.handle_call_tool_for_test(Some(missing_parent), serde_json::json!(1)).await;
     assert!(resp.error.is_some());
-    assert!(resp.error.unwrap().message.contains("must include at minimum an `up:` field"));
+    assert!(resp.error.unwrap().message.contains("Parent _index.md not found in the folder"));
 
-    // 2. Empty `up:` key
-    let empty_up = serde_json::json!({
+    // 2. Forbidden `up:` key
+    let has_up = serde_json::json!({
         "name": "write_note",
         "arguments": {
             "vault_id": "test_vault",
             "path": "test2.md",
-            "content": "---\nup: \"\"\n---\nBody text",
+            "content": "---\nup: \"[[_index]]\"\n---\nBody text",
             "append": false
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(empty_up), serde_json::json!(2)).await;
+    let resp = server.handle_call_tool_for_test(Some(has_up), serde_json::json!(2)).await;
     assert!(resp.error.is_some());
-    assert!(resp.error.unwrap().message.contains("empty")); // Wait, the bouncer message might say "missing `up:`" or similar, need to ensure the implementation handles empty correctly. The current implementation in server.rs line 465 just checks if frontmatter.contains_key("up"), we might need to update the server.rs to enforce it's not empty!
+    assert!(resp.error.unwrap().message.contains("deprecated")); 
 
-    // 3. Null `up:` key
-    let null_up = serde_json::json!({
+    // 3. Disallowed keys
+    let disallowed_key = serde_json::json!({
         "name": "write_note",
         "arguments": {
             "vault_id": "test_vault",
             "path": "test3.md",
-            "content": "---\nup: null\n---\nBody text",
+            "content": "---\ntitle: \"Valid\"\nbad_key: null\n---\nPart of [[_index]]\nBody text",
             "append": false
         }
     });
-    let resp = server.handle_call_tool_for_test(Some(null_up), serde_json::json!(3)).await;
+    let resp = server.handle_call_tool_for_test(Some(disallowed_key), serde_json::json!(3)).await;
     assert!(resp.error.is_some());
+    assert!(resp.error.unwrap().message.contains("not allowed"));
     
     // 4. Malformed YAML
     let malformed_yaml = serde_json::json!({
@@ -68,7 +69,7 @@ async fn test_yaml_enforcement() {
         "arguments": {
             "vault_id": "test_vault",
             "path": "test4.md",
-            "content": "---\nup: [[Index]]\nunclosed bracket: [\n---\nBody",
+            "content": "---\ntitle: \"T\"\nunclosed bracket: [\n---\nBody",
             "append": false
         }
     });

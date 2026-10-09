@@ -23,7 +23,7 @@ async fn test_creation_fk_constraints() {
     let server = McpServer::new(Arc::new(RwLock::new(config)), std::path::PathBuf::from("dummy.yaml"));
     
     // Setup a valid Index file first
-    let _ = fs::write(dir.path().join("Index.md"), "---\nup: \"[[Index]]\"\n---\n");
+    let _ = fs::write(dir.path().join("_index.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]");
 
     // Case 1: Orphan target (linking to a non-existent file)
     let orphan_req = serde_json::json!({
@@ -31,7 +31,7 @@ async fn test_creation_fk_constraints() {
         "arguments": {
             "vault_id": "test_vault",
             "path": "test1.md",
-            "content": "---\nup: \"[[NonExistent]]\"\n---\n",
+            "content": "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[NonExistent]]",
             "append": false
         }
     });
@@ -47,7 +47,7 @@ async fn test_creation_fk_constraints() {
         "arguments": {
             "vault_id": "test_vault",
             "path": "test2.md",
-            "content": "---\nup: \"[[test2]]\"\n---\n",
+            "content": "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[test2]]",
             "append": false
         }
     });
@@ -62,7 +62,7 @@ async fn test_creation_fk_constraints() {
         "arguments": {
             "vault_id": "test_vault",
             "path": "test3.md",
-            "content": "---\nup: \"[[inDeX]]\"\n---\n",
+            "content": "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]",
             "append": false
         }
     });
@@ -70,13 +70,13 @@ async fn test_creation_fk_constraints() {
     // Should be allowed because of case-insensitive filesystem check
     assert!(resp.error.is_none());
 
-    // Case 4: Alias syntax mismatch (up: "[[Index|My Index]]")
+    // Case 4: Alias syntax mismatch (up: "[[_index|My Index]]")
     let alias_req = serde_json::json!({
         "name": "write_note",
         "arguments": {
             "vault_id": "test_vault",
             "path": "test4.md",
-            "content": "---\nup: \"[[Index|My Index]]\"\n---\n",
+            "content": "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]",
             "append": false
         }
     });

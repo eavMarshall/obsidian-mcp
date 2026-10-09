@@ -1,6 +1,10 @@
 ---
-up: "[[Index]]"
+title: "Creation FK Constraints"
+tags: []
+summary: ""
 ---
+Part of [[_index]]
+
 # Creation FK constraints
 
 - [x] `Case 1: Orphan target` - Implemented in `tests/test_creation_fk.rs`
