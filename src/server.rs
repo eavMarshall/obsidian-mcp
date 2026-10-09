@@ -7,7 +7,7 @@ use tokio::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{self, AsyncBufReadExt, BufReader};
 
 pub struct McpServer {
     config: Arc<RwLock<AppConfig>>,
@@ -586,13 +586,11 @@ Part of [[Main Topic]]
                         if yaml_val.get("up").is_some() {
                             return Err("ARCHITECTURAL VIOLATION: The `up:` frontmatter field is deprecated. Use `Part of [[...]]` in the body or rely on the folder's `_index.md`.".to_string());
                         }
-                        if let Some(obj) = yaml_val.as_mapping() {
+                        if let Some(obj) = yaml_val.as_object() {
                             let expected = ["title", "tags", "summary", "code", "file", "area"];
-                            for key in obj.keys() {
-                                if let Some(k_str) = key.as_str() {
-                                    if !expected.contains(&k_str) {
-                                        return Err(format!("ARCHITECTURAL VIOLATION: Frontmatter key '{}' is not allowed. Expected keys: title, tags, summary, code, file, area.", k_str));
-                                    }
+                            for k_str in obj.keys() {
+                                if !expected.contains(&k_str.as_str()) {
+                                    return Err(format!("ARCHITECTURAL VIOLATION: Frontmatter key '{}' is not allowed. Expected keys: title, tags, summary, code, file, area.", k_str));
                                 }
                             }
                         }
@@ -657,7 +655,7 @@ Part of [[Main Topic]]
                 let mut effective_target = target_file.to_string();
                 if target_file.to_lowercase() == "_index" {
                     if let Some(parent) = std::path::Path::new(&safe_path).parent() {
-                        let parent_str = parent.to_string_lossy().replace("\\\\", "/");
+                        let parent_str = parent.to_string_lossy().replace("\\", "/");
                         if !parent_str.is_empty() {
                             effective_target = format!("{}/_index", parent_str);
                         }
@@ -815,6 +813,7 @@ Part of [[Main Topic]]
         }
 
         let safe_path = Self::sanitize_path(relative_path)?;
+        let is_exempt = safe_path.to_lowercase().starts_with("tests/") || safe_path.to_lowercase().starts_with(".obsidian/");
 
         if safe_path.to_lowercase() == "how_to_navigate.md" || safe_path.to_lowercase().ends_with("/how_to_navigate.md") {
             return Err("ARCHITECTURAL VIOLATION: You cannot delete the auto-generated HOW_TO_NAVIGATE.md file.".to_string());
@@ -938,7 +937,6 @@ Part of [[Main Topic]]
     }
 
     async fn check_integrity_logic(&self, vault_id: &str) -> Result<serde_json::Value, String> {
-    async fn check_integrity_logic(&self, vault_id: &str) -> Result<serde_json::Value, String> {
         let config = self.config.read().await;
         let vault = config.vaults.iter().find(|v| v.id == vault_id)
             .ok_or_else(|| format!("Vault {} not found", vault_id))?;
@@ -952,7 +950,7 @@ Part of [[Main Topic]]
                 if let Some(stem) = entry.path().file_stem().and_then(|s| s.to_str()) {
                     all_files.insert(stem.to_lowercase(), path_buf.clone());
                 }
-                let rel = entry.path().strip_prefix(&vault.path).unwrap_or(entry.path()).to_string_lossy().replace("\\\\", "/");
+                let rel = entry.path().strip_prefix(&vault.path).unwrap_or(entry.path()).to_string_lossy().replace("\\", "/");
                 let rel_lower = rel.to_lowercase();
                 all_files.insert(rel_lower.clone(), path_buf.clone());
                 if let Some((no_ext, _)) = rel_lower.rsplit_once('.') {
@@ -965,7 +963,7 @@ Part of [[Main Topic]]
             for file in md_files {
                 if let Ok(content) = tokio::fs::read_to_string(&file).await {
                     let extracted = crate::parser::MarkdownParser::extract_links(&content);
-                    let relative_path = file.strip_prefix(&vault.path).unwrap_or(&file).to_string_lossy().replace("\\\\", "/").to_string();
+                    let relative_path = file.strip_prefix(&vault.path).unwrap_or(&file).to_string_lossy().replace("\\", "/").to_string();
                     
                     for link in extracted {
                         if link.starts_with("obsidian://") { continue; }
@@ -980,7 +978,7 @@ Part of [[Main Topic]]
                         let mut effective_target = target_file.to_string();
                         if target_file.to_lowercase() == "_index" {
                             if let Some(parent) = std::path::Path::new(&relative_path).parent() {
-                                let parent_str = parent.to_string_lossy().replace("\\\\", "/");
+                                let parent_str = parent.to_string_lossy().replace("\\", "/");
                                 if !parent_str.is_empty() {
                                     effective_target = format!("{}/_index", parent_str);
                                 }
@@ -1023,7 +1021,6 @@ Part of [[Main Topic]]
             "dead_links": dead_links
         }))
     }
-}
 
     async fn list_mocs_logic(&self, vault_id: &str) -> Result<serde_json::Value, String> {
         let config = self.config.read().await;

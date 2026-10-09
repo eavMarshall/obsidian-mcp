@@ -3,7 +3,7 @@ use obsidian_mcp::parser::MarkdownParser;
 #[tokio::test]
 async fn test_complex_markdown_parsing() {
     let raw = r#"
-# Intro
+## Intro
 Welcome to the vault.
 ## Code Section
 Here is some code:

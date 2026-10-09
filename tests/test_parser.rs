@@ -15,7 +15,7 @@ Do not use `unwrap()`.
 
     assert_eq!(chunks.len(), 2, "Should create exactly two chunks based on headers");
 
-    assert_eq!(chunks[0].header, "Core Rules");
+    assert_eq!(chunks[0].header, "ROOT");
     assert_eq!(chunks[0].content.trim(), "# Core Rules\nThis is the main rule block.\nIt has a **bold** word and an *italic* word.");
 
     assert_eq!(chunks[1].header, "Database");

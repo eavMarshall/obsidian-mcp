@@ -25,7 +25,7 @@ impl MarkdownParser {
 
         for (event, range) in parser {
             match event {
-                Event::Start(Tag::Heading { .. }) | Event::Start(Tag::Heading(..)) => {
+                Event::Start(Tag::Heading { .. }) => {
                     let header_text = &markdown[range.start..range.end];
                     let is_case = header_text.starts_with("## ") || header_text.starts_with("### ") || header_text.starts_with("##\t") || header_text.starts_with("###\t");
                     if is_case {
