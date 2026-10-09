@@ -76,4 +76,29 @@ async fn test_yaml_enforcement() {
     let resp = server.handle_call_tool_for_test(Some(malformed_yaml), serde_json::json!(4)).await;
     assert!(resp.error.is_some());
     assert!(resp.error.unwrap().message.contains("Invalid YAML"));
+    
+    // 5. Exempt folders tests/ and .obsidian/ shouldn't complain about missing parent
+    let exempt_tests = serde_json::json!({
+        "name": "write_note",
+        "arguments": {
+            "vault_id": "test_vault",
+            "path": "tests/my_test_case.md",
+            "content": "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nBody text with no part of",
+            "append": false
+        }
+    });
+    let resp = server.handle_call_tool_for_test(Some(exempt_tests), serde_json::json!(5)).await;
+    assert!(resp.error.is_none());
+    
+    let exempt_obsidian = serde_json::json!({
+        "name": "write_note",
+        "arguments": {
+            "vault_id": "test_vault",
+            "path": ".obsidian/workspace",
+            "content": "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nNo parent needed",
+            "append": false
+        }
+    });
+    let resp = server.handle_call_tool_for_test(Some(exempt_obsidian), serde_json::json!(6)).await;
+    assert!(resp.error.is_none());
 }

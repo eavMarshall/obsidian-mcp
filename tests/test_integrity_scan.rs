@@ -24,9 +24,13 @@ async fn test_integrity_scan_cases() {
     
     // Create base files
     let _ = fs::write(dir.path().join("_index.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]# Root\n[[DanglingLink]]\n[[EmptyNote]]");
-    let _ = fs::write(dir.path().join("ValidNote.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]# Valid");
+    let _ = fs::write(dir.path().join("ValidNote.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]# Valid\nLink with anchor [[EmptyNote#some-heading]]\nSkip obsidian uri [[obsidian://open?vault=test]]");
     let _ = fs::write(dir.path().join("OrphanNote.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]# Orphan\nNo links to this.");
-    let _ = fs::write(dir.path().join("EmptyNote.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]"); // Empty headers test case
+    let _ = fs::write(dir.path().join("EmptyNote.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]\n# some-heading"); // Empty headers test case
+    
+    fs::create_dir(dir.path().join("subfolder")).unwrap();
+    let _ = fs::write(dir.path().join("subfolder/_index.md"), "---\ntitle: \"Sub\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]");
+    let _ = fs::write(dir.path().join("subfolder/SubNote.md"), "---\ntitle: \"Sub Note\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]\nLink to relative index [[_index]]");
 
     let integrity_req = serde_json::json!({
         "name": "check_integrity",
@@ -44,4 +48,10 @@ async fn test_integrity_scan_cases() {
     
     // Case 1: Dangling forward link detection
     assert!(text.contains("DanglingLink"));
+    
+    // Check that we didn't flag the valid ones as dangling!
+    assert!(!text.contains("EmptyNote#some-heading"));
+    assert!(!text.contains("EmptyNote"));
+    assert!(!text.contains("obsidian://open"));
+    assert!(!text.contains("subfolder/_index")); // The [[_index]] inside subfolder should resolve to subfolder/_index.md which exists
 }

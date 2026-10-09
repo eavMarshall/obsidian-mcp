@@ -27,6 +27,10 @@ async fn test_deletion_fk_constraints() {
     let _ = fs::write(dir.path().join("TargetNote.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]# Target");
     let _ = fs::write(dir.path().join("SourceNote.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]# Source\n[[TargetNote]]");
     let _ = fs::write(dir.path().join("_VAULT_RULES.md"), "Rules file");
+    
+    fs::create_dir(dir.path().join("tests")).unwrap();
+    let _ = fs::write(dir.path().join("tests/TestTarget.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]");
+    let _ = fs::write(dir.path().join("SourceNote2.md"), "---\ntitle: \"Test\"\nsummary: \"\"\ntags: []\n---\nPart of [[_index]]\n[[tests/TestTarget]]");
 
     // Case 1: Delete note with active backlinks (TargetNote is linked by SourceNote)
     let delete_linked_req = serde_json::json!({
@@ -62,4 +66,15 @@ async fn test_deletion_fk_constraints() {
     });
     let resp = server.handle_call_tool_for_test(Some(delete_unlinked_req), serde_json::json!(3)).await;
     assert!(resp.error.is_none());
+    
+    // Case 4: Delete exempt note in tests/ despite active backlink
+    let delete_exempt_req = serde_json::json!({
+        "name": "delete_note",
+        "arguments": {
+            "vault_id": "test_vault",
+            "path": "tests/TestTarget.md"
+        }
+    });
+    let resp = server.handle_call_tool_for_test(Some(delete_exempt_req), serde_json::json!(4)).await;
+    assert!(resp.error.is_none(), "Should be exempt from FK validation");
 }
